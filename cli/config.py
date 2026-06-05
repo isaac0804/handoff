@@ -1,10 +1,10 @@
 """YAML configuration loading and merging for ds-cli.
 
 Configuration flow:
-  1. Load cli/default_config.yaml (system defaults, shipped with repo)
-  2. If ~/.ds-cli/config.yaml is missing, run the interactive installer
-  3. Load ~/.ds-cli/config.yaml (user-owned runtime config)
-  4. Deep-merge user config on top of default
+  1. If ~/.ds-cli/config.yaml is missing, run the interactive installer
+  2. Load ~/.ds-cli/config.yaml as the single source of truth
+  3. If the user config includes the bundled default_config.yaml (via `include:`),
+     the defaults are deep-merged first, then the user config overrides them.
 
 Backend resolution:
   - Resolved backend = backend_template + specific backend overrides
@@ -30,11 +30,7 @@ except ImportError:
 
 _DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "default_config.yaml")
 _DEFAULT_USER_CONFIG = """# ds-cli user configuration
-# Created by ds-cli install.
-#
-# Edit this file and replace <YOUR_TOKEN> before using the default DeepSeek backend.
-# backend_template comes from ds-cli's built-in defaults, so backend entries here only
-# need to override fields that differ from the system template.
+include: {default_config_path}
 
 default_backend: default
 fast_backend: default
@@ -42,12 +38,14 @@ fast_backend: default
 backends:
   default:
     description: "DeepSeek API"
-    ANTHROPIC_AUTH_TOKEN: "<YOUR_TOKEN>"
+    env:
+      ANTHROPIC_AUTH_TOKEN: "<YOUR_TOKEN>"
 
   # opencode:
   #   description: "Local OpenCode proxy"
-  #   ANTHROPIC_BASE_URL: "http://127.0.0.1:4000"
-  #   ANTHROPIC_AUTH_TOKEN: "unused"
+  #   env:
+  #     ANTHROPIC_BASE_URL: "http://127.0.0.1:4000"
+  #     ANTHROPIC_AUTH_TOKEN: "unused"
 """
 
 
@@ -82,9 +80,12 @@ def write_default_user_config() -> bool:
         return False
 
     try:
+        content = _DEFAULT_USER_CONFIG.format(
+            default_config_path=_DEFAULT_CONFIG_PATH,
+        )
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            f.write(_DEFAULT_USER_CONFIG)
+            f.write(content)
         return True
     except OSError as e:
         print(f"ds-cli: failed to create default user config at {path}: {e}", file=sys.stderr)
@@ -114,14 +115,87 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
+def _resolve_include_path(include_val: str, including_file_dir: str) -> str:
+    """Resolve an include path.
+
+    Absolute paths are used as-is.
+    Relative paths: first try relative to the including file's directory,
+    then fall back to the package directory.
+    """
+    if os.path.isabs(include_val):
+        return include_val
+
+    # Try relative to the including file's directory first
+    candidate = os.path.join(including_file_dir, include_val)
+    if os.path.isfile(candidate):
+        return candidate
+
+    # Fall back to the package directory
+    candidate = os.path.join(os.path.dirname(__file__), include_val)
+    if os.path.isfile(candidate):
+        return candidate
+
+    return candidate
+
+
+def _load_with_includes(path: str, _seen: Optional[set] = None) -> dict:
+    """Load a YAML file, recursively resolving `include:` directives.
+
+    `include` can be a string (single path) or list of paths.
+    Included files are deep-merged first (in order), then the current
+    file's own keys are deep-merged on top so they override includes.
+
+    Absolute include paths are used as-is.  Relative paths are resolved
+    against the including file's directory first, then the package dir.
+
+    _seen tracks already-visited paths to guard against cycles.
+    """
+    if _seen is None:
+        _seen = set()
+
+    real = os.path.realpath(path)
+    if real in _seen:
+        return {}
+    _seen.add(real)
+
+    data = _load_yaml(path)
+    includes = data.pop("include", None)
+    if isinstance(includes, str):
+        includes = [includes]
+    elif includes is None:
+        includes = []
+
+    including_dir = os.path.dirname(path)
+
+    # Deep-merge all includes first
+    merged = {}
+    for inc in includes:
+        inc_path = _resolve_include_path(inc, including_dir)
+        if os.path.isfile(inc_path):
+            inc_data = _load_with_includes(inc_path, _seen)
+            merged = _deep_merge(merged, inc_data)
+
+    # Then deep-merge current file's own keys on top
+    merged = _deep_merge(merged, data)
+
+    # Back-compat shim: if this file had no include, and the merged result
+    # lacks backend_template, implicitly include the bundled defaults.
+    if not includes and "backend_template" not in merged:
+        default_path = os.path.realpath(_DEFAULT_CONFIG_PATH)
+        if default_path not in _seen:
+            _seen.add(default_path)
+            defaults = _load_yaml(default_path)
+            merged = _deep_merge(defaults, merged)
+
+    return merged
+
+
 class Config:
     """Resolved ds-cli configuration."""
 
     def __init__(self):
         _ensure_user_config_exists()
-        self.defaults = _load_yaml(_DEFAULT_CONFIG_PATH)
-        self.user = _load_yaml(user_config_path())
-        self._merged = _deep_merge(self.defaults, self.user)
+        self._merged = _load_with_includes(user_config_path())
         self._validate()
 
     @property

@@ -112,7 +112,7 @@ def get_db():
         if missing:
             print(
                 f"ds-cli: schema missing columns {missing}; "
-                f"run 'ds-cli/reset-state.sh' to reset",
+                f"delete ~/.ds-cli/runs/dscli.db and retry",
                 file=sys.stderr,
             )
             sys.exit(2)
@@ -266,41 +266,6 @@ def extract_result(jsonl_path: str):
             return last
     except FileNotFoundError:
         return None
-
-
-def resolve_jsonl(target: str, conn: sqlite3.Connection) -> str:
-    """Turn user-supplied id / uuid / run_id / seq / *.jsonl into an absolute .jsonl path."""
-    if target.endswith(".jsonl"):
-        return target
-
-    # run_id?
-    row = conn.execute(
-        "SELECT jsonl_path FROM runs WHERE run_id = ?", (target,)
-    ).fetchone()
-    if row:
-        return row["jsonl_path"]
-
-    # seq?
-    try:
-        seq = int(target)
-    except ValueError:
-        seq = None
-    if seq is not None:
-        row = conn.execute(
-            "SELECT jsonl_path FROM runs WHERE seq = ? ORDER BY created_at DESC LIMIT 1",
-            (seq,),
-        ).fetchone()
-        if row:
-            return row["jsonl_path"]
-
-    # uuid?
-    row = conn.execute(
-        "SELECT jsonl_path FROM runs WHERE uuid = ?", (target,)
-    ).fetchone()
-    if row:
-        return row["jsonl_path"]
-
-    return os.path.join(DB_DIR, f"{target}.jsonl")
 
 
 def find_run(conn: sqlite3.Connection, selector: Optional[str]):

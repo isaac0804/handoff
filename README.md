@@ -60,7 +60,7 @@ backends:
 https://api.deepseek.com/anthropic
 ```
 
-你至少需要把 `<YOUR_TOKEN>` 改成真实 token。只要 token 仍然以 `<` 开头，`ds-cli run`、`start`、`go` 会在真正调用 `claude` 前直接报错，不会创建新的 run 记录。
+你至少需要把 `<YOUR_TOKEN>` 改成真实 token。只要 token 仍然以 `<` 开头，`ds-cli run` 会在真正调用 `claude` 前直接报错，不会创建新的 run 记录。
 
 `default_backend` 是普通模式使用的配置；`fast_backend` 是加 `--fast` 时使用的配置。命令行不提供 `--backend`，用户只需要在配置文件里决定普通模式和快速模式分别指向哪个 backend。
 

@@ -12,8 +12,6 @@ import subprocess
 import threading
 import signal
 import datetime
-from typing import Optional
-
 from .core import progress_preview, CCLEAN, extract_result
 
 
@@ -53,79 +51,6 @@ def read_tail_lines(jsonl_path: str, max_lines: int = 80) -> list[str]:
                 t = ""
             display.append(f"{t}\t{preview}")
     return display[-max_lines:] or ["(no displayable events)"]
-
-
-def run_claude_foreground(
-    cwd: str,
-    prompt_text: str,
-    session_id: Optional[str],
-    jsonl_path: str,
-    cmd: list[str],
-    conn,
-    uid: str,
-    task_paths_tuple,
-):
-    """Run claude in foreground, writing to jsonl and displaying progress.
-
-    Used by 'start --fg'.  The 'run' command uses _execute() instead.
-    """
-    proc = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-
-    with open(jsonl_path, "w") as jf:
-        for line_bytes in proc.stdout:
-            try:
-                line = line_bytes.decode("utf-8", errors="replace").rstrip("\r\n")
-            except UnicodeDecodeError:
-                line = line_bytes.decode("latin-1", errors="replace").rstrip("\r\n")
-
-            jf.write(line + "\n")
-            jf.flush()
-
-            if not line.startswith("{"):
-                continue
-
-            try:
-                obj = json.loads(line)
-                t = obj.get("type", "")
-                ts = datetime.datetime.now().strftime("%H:%M:%S")
-                if t == "assistant":
-                    c0 = obj["message"]["content"][0]
-                    text = (c0.get("text") or c0.get("input") or "")[:70]
-                    text = text.replace("\n", " ")
-                    print(f"{ts} {t}\t{text}")
-                elif t == "user":
-                    text = (obj["message"]["content"][0].get("content", "") or "")[:70]
-                    text = text.replace("\n", " ")
-                    print(f"{ts} {t}\t{text}")
-                elif t == "result":
-                    print(f'{ts} result\tDONE: {obj.get("result", "")}')
-                elif t == "system":
-                    print(f"{ts} system\t{obj.get('subtype', '')}")
-                elif t == "stream_event":
-                    print(f"{ts} stream_event\t{obj.get('event', {}).get('type', '')}")
-            except (json.JSONDecodeError, KeyError, IndexError):
-                pass
-
-    proc.wait()
-
-
-def run_claude_background(cwd: str, prompt_text: str, session_id: Optional[str], jsonl_path: str, cmd: list[str]):
-    """Run claude in background, writing to jsonl.
-
-    Used by 'start' (without --fg).
-    """
-    with open(jsonl_path, "w") as jf:
-        subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            stdout=jf,
-            stderr=subprocess.STDOUT,
-        )
 
 
 def _pump_cclean(cclean, of):

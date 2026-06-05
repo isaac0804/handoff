@@ -5,20 +5,24 @@ import sys
 import shlex
 
 from ..core import get_db, find_run, short_path, row_value
-from ..backend import set_backend_env, build_resume_args, ensure_backend_token_ready, resolve_backend_model
+from ..backend import set_backend_env, build_resume_args, resolve_backend_model
 from ..config import Config
 
 
 def cmd_go(argv: list[str], config: Config):
-    """ds-cli go [<run-id|seq>]"""
+    """ds-cli go [<run-id|seq>] [--backend <name>]"""
+    backend_name = ""
     selector = ""
 
     i = 0
     while i < len(argv):
         a = argv[i]
         if a == "--backend":
-            print("ds-cli: --backend has been removed; go uses the backend saved with the run", file=sys.stderr)
-            sys.exit(2)
+            i += 1
+            if i >= len(argv):
+                print("ds-cli go: --backend requires a value", file=sys.stderr)
+                sys.exit(2)
+            backend_name = argv[i]
         elif a in ("-h", "--help"):
             from ..main import usage
             usage()
@@ -38,7 +42,9 @@ def cmd_go(argv: list[str], config: Config):
         print("ds-cli go: no run found", file=sys.stderr)
         sys.exit(1)
 
-    backend_name = row_value(row, "backend", "") or config.default_backend
+    # Determine backend: saved backend, explicit override, or default
+    if not backend_name:
+        backend_name = row_value(row, "backend", "") or config.default_backend
 
     backend_cfg = config.get_backend(backend_name)
     if not backend_cfg:
@@ -48,8 +54,6 @@ def cmd_go(argv: list[str], config: Config):
             file=sys.stderr,
         )
         sys.exit(2)
-
-    ensure_backend_token_ready(backend_name, backend_cfg, config.user_config_path)
 
     model = resolve_backend_model(backend_cfg, config.default_model, config.pro_model, False)
     backend_cfg["_resolved_model"] = model

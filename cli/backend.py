@@ -5,7 +5,6 @@ backend overrides in YAML), this module provides:
 
   - set_backend_env(backend, ...): Set environment variables for Claude
   - build_claude_args(backend, ...): Build claude CLI argument list
-  - build_resume_args(backend, ...): Build claude resume argument list
 
 Placeholder substitution:
   {prompt}         — the prompt text
@@ -40,8 +39,8 @@ def _resolve_env_val(val, ctx: dict):
 def set_backend_env(backend: dict, default_model: str, pro_model: str, model: str):
     """Set environment variables for the Claude backend.
 
-    Sets ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, CLAUDE_CONFIG_DIR,
-    and model-related env vars from the resolved backend dict.
+    Iterates the backend's 'env' mapping, substitutes placeholders,
+    and sets each key=value in os.environ.
     """
     ctx = {
         "default_model": default_model,
@@ -50,22 +49,10 @@ def set_backend_env(backend: dict, default_model: str, pro_model: str, model: st
         "home": os.path.expanduser("~"),
     }
 
-    env_keys = [
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_MODEL",
-        "CLAUDE_CONFIG_DIR",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        "CLAUDE_CODE_SUBAGENT_MODEL",
-    ]
-
-    for key in env_keys:
-        val = backend.get(key)
-        if val is not None:
-            resolved = _resolve_env_val(val, ctx)
-            os.environ[key] = resolved
+    env_map = backend.get("env", {})
+    for key, val in env_map.items():
+        resolved = _resolve_env_val(val, ctx)
+        os.environ[key] = resolved
 
     # Handle CLAUDE_CONFIG_DIR defaults
     if "CLAUDE_CONFIG_DIR" not in os.environ or not os.environ["CLAUDE_CONFIG_DIR"]:
@@ -181,7 +168,7 @@ def resolve_backend_model(backend: dict, default_model: str, pro_model: str, is_
 
 def ensure_backend_token_ready(backend_name: str, backend: dict, user_config_path: str):
     """Fail fast when the selected backend still uses a placeholder token."""
-    token = backend.get("ANTHROPIC_AUTH_TOKEN")
+    token = backend.get("env", {}).get("ANTHROPIC_AUTH_TOKEN")
     if isinstance(token, str) and token.startswith("<"):
         print(
             f"ds-cli: backend '{backend_name}' still uses placeholder token {token}. "

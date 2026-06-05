@@ -2,6 +2,7 @@
 
 import curses
 import time
+import textwrap
 import subprocess
 
 from .core import format_run_row
@@ -43,6 +44,8 @@ def list_tui(stdscr, rows, full_cwd: bool):
     mode = "list"
     last_detail_refresh = 0.0
     detail_lines = []
+    detail_top = 0       # index of first visible detail line
+    detail_follow = True  # pin to bottom as live tail grows
 
     # ── color setup ──────────────────────────────────────────────────────
     use_color = curses.has_colors()
@@ -68,9 +71,9 @@ def list_tui(stdscr, rows, full_cwd: bool):
 
     toolbar_parts = [
         ("[↑↓/jk]", A_KEY), (" Move  ", A_TOOLBAR),
-        ("[Enter]", A_KEY), (" View  ", A_TOOLBAR),
-        ("[C]", A_KEY), (" Copy Session  ", A_TOOLBAR),
+        ("[→/Enter]", A_KEY), (" View  ", A_TOOLBAR),
         ("[G]", A_KEY), (" Resume  ", A_TOOLBAR),
+        ("[C]", A_KEY), (" Copy Session  ", A_TOOLBAR),
         ("[q]", A_KEY), (" Quit", A_TOOLBAR),
     ]
 
@@ -114,10 +117,14 @@ def list_tui(stdscr, rows, full_cwd: bool):
                 selected = max(0, selected - 1)
             elif key in (curses.KEY_DOWN, ord("j")):
                 selected = min(len(rows) - 1, selected + 1)
-            elif key in (10, 13, curses.KEY_ENTER):
+            elif key in (10, 13, curses.KEY_ENTER, curses.KEY_RIGHT):
                 mode = "detail"
                 last_detail_refresh = 0.0
                 detail_lines = []
+                detail_top = 0
+                detail_follow = True
+            elif key in (ord("g"), ord("G")):
+                return ("go", rows[selected]["run_id"])
             elif key in (ord("c"), ord("C")):
                 session_id = rows[selected]["uuid"]
                 try:
@@ -125,8 +132,6 @@ def list_tui(stdscr, rows, full_cwd: bool):
                     status = f"copied session {session_id}"
                 except (subprocess.CalledProcessError, FileNotFoundError):
                     status = "copy failed: pbcopy not available"
-            elif key in (ord("g"), ord("G")):
-                return ("go", rows[selected]["run_id"])
             elif key in (ord("q"), ord("Q"), 27):
                 return None
         else:
@@ -135,27 +140,70 @@ def list_tui(stdscr, rows, full_cwd: bool):
 
             row = rows[selected]
             fmt = format_run_row(row, True)
-            title = f"{fmt['id']}  cwd={fmt['cwd']}  uuid={fmt['uuid']}"
-            safe_addnstr(stdscr, 0, 0, title, width - 1, A_HEADER)
+
+            # Info header: seq id, uuid, cwd, date — then the full input prompt.
+            wrap_w = max(1, width - 1)
+            info_lines = [
+                f"{fmt['id']}  ({row['seq']})",
+                f"uuid : {row['uuid']}",
+                f"cwd  : {fmt['cwd']}",
+                f"date : {row['created_at']}",
+                "",
+            ]
+            prompt_text = (row["prompt"] or "").strip()
+            for para in prompt_text.split("\n"):
+                wrapped = textwrap.wrap(para, wrap_w) if para else [""]
+                info_lines.extend(wrapped)
+            info_lines.append("")
+            info_lines.append("─" * wrap_w)
 
             body_h = max(1, height - 3)
-            visible = detail_lines[-body_h:]
+            content = info_lines + detail_lines
+            max_top = max(0, len(content) - body_h)
+            if detail_follow:
+                detail_top = max_top
+            else:
+                detail_top = min(detail_top, max_top)
+            start = detail_top
+            visible = content[start:start + body_h]
             for y, line in enumerate(visible, start=1):
-                safe_addnstr(stdscr, y, 0, line, width - 1)
+                content_idx = start + y - 1
+                attr = A_HEADER if content_idx < 4 else A_NORMAL
+                safe_addnstr(stdscr, y, 0, line, width - 1, attr)
 
+            scroll_hint = "" if detail_follow else f"  {start + 1}-{start + len(visible)}/{len(content)}"
             draw_toolbar(
                 stdscr,
                 height - 1,
                 width,
-                [("[Esc]", A_KEY), (" 返回", A_TOOLBAR)],
-                "",
+                [("[←/Esc]", A_KEY), (" Back  ", A_TOOLBAR),
+                 ("[↑↓/jk]", A_KEY), (" Scroll  ", A_TOOLBAR),
+                 ("[g/G]", A_KEY), (" Top/End", A_TOOLBAR)],
+                scroll_hint,
                 A_TOOLBAR,
                 A_SUCCESS,
                 A_ERROR,
             )
 
             key = stdscr.getch()
-            if key == 27:
+            if key in (27, curses.KEY_LEFT):
                 mode = "list"
+            elif key in (curses.KEY_UP, ord("k")):
+                detail_follow = False
+                detail_top = max(0, detail_top - 1)
+            elif key in (curses.KEY_DOWN, ord("j")):
+                detail_top = min(max_top, detail_top + 1)
+                detail_follow = detail_top >= max_top
+            elif key in (curses.KEY_PPAGE,):
+                detail_follow = False
+                detail_top = max(0, detail_top - body_h)
+            elif key in (curses.KEY_NPAGE,):
+                detail_top = min(max_top, detail_top + body_h)
+                detail_follow = detail_top >= max_top
+            elif key in (ord("g"), curses.KEY_HOME):
+                detail_follow = False
+                detail_top = 0
+            elif key in (ord("G"), curses.KEY_END):
+                detail_follow = True
             elif key in (ord("q"), ord("Q")):
                 return None
