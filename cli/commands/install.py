@@ -74,8 +74,8 @@ def _run_install_sh():
         sys.exit(result.returncode)
 
 
-def run_install():
-    if not _confirm():
+def run_install(assume_yes: bool = False):
+    if not assume_yes and not _confirm():
         print("ds-cli: initialization cancelled")
         sys.exit(1)
 
@@ -97,9 +97,13 @@ def run_install():
 
 def cmd_install(args):
     if args and args[0] in ("-h", "--help"):
-        print("usage: ds-cli install")
+        print("usage: ds-cli install [-y|--yes]")
         return
-    if args:
-        print("ds-cli: install does not accept arguments", file=sys.stderr)
-        sys.exit(2)
-    run_install()
+    assume_yes = False
+    for arg in args:
+        if arg in ("-y", "--yes"):
+            assume_yes = True
+        else:
+            print(f"ds-cli: install: unexpected argument '{arg}'", file=sys.stderr)
+            sys.exit(2)
+    run_install(assume_yes=assume_yes)

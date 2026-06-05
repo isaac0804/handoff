@@ -1,82 +1,87 @@
 # ds-cli
 
-`ds-cli` 的用户配置在：
+**English** · [中文](README.zh-CN.md)
 
-```text
-~/.ds-cli/config.yaml
-```
+GPT-5.5 / Opus plans; DeepSeek V4 codes.
 
-第一次运行 `ds-cli`，或者执行 `ds-cli install` 时，`ds-cli` 会先检查这份配置是否存在。缺少配置时会进入初始化确认界面；`ds-cli install` 每次执行也会进入同一套确认界面，用来刷新 hard/soft link。界面会提示即将写入的内容：默认配置文件、`~/bin/ds-cli` 软链接、Codex agent 配置、Claude Code skill 链接。只有输入 `Y` 才会继续，其他输入都会退出。
+You install ds-cli once — as a skill in Claude Code, or a subagent in Codex — then drive it in one line. You rarely type `ds-cli` by hand.
 
-初始化完成后，终端会打印实际写入或保留了哪些文件，并提示你回到这份 README 修改配置。
+## How you use it
 
-## 安装
+Ask your agent to plan, then hand the execution to ds-cli.
 
-需要 Python 3 和 PyYAML：
+### Claude Code — the `/ds-cli` skill
+
+> Make a plan, then have `/ds-cli` execute the tasks above.
+
+Each task runs as a **background shell command**. Click it to watch ds-cli's live progress.
+
+![Claude Code dispatching ds-cli in the background](assets/claude-code.jpg)
+
+Click the background task to watch ds-cli's live shell output:
+
+![ds-cli background shell output](assets/claude-shell.jpg)
+
+### Codex — the `ds-agent` subagent
+
+> Make a plan, then have `ds-agent` execute the tasks above.
+
+Codex runs the subagent in the background; you watch progress in the subagent view.
+
+![Codex waking the ds-agent subagent](assets/codex.jpg)
+
+That's the whole idea: the flagship model decomposes and checks the work; DeepSeek V4 executes it, cheaply.
+
+---
+
+## Install
+
+One line, no manual clone:
 
 ```bash
-python3 -m pip install pyyaml
+curl -fsSL https://raw.githubusercontent.com/come2u/ds-cli/main/install-online.sh | bash
 ```
 
-在仓库目录执行：
-
-```bash
-cd /Users/sam/dev/github/ds-cli
-./ds-cli install
-```
-
-`ds-cli install` 会创建缺失的 `~/.ds-cli/config.yaml`，然后触发仓库里的 `install.sh`。如果配置已经存在，它不会覆盖配置，只会在确认后刷新链接。`install.sh` 只负责刷新这些链接：
+Requires Python 3 and git. The installer clones ds-cli to `~/.local/share/ds-cli` and links it into the places Claude Code, Codex, and your shell look:
 
 ```text
-~/bin/ds-cli -> <repo>/ds-cli
-~/.codex/agents/ds-agent.toml -> <repo>/ds-agent.toml
-~/.claude/skills/ds-cli/SKILL.md -> <repo>/SKILL.md
+~/bin/ds-cli                       -> <checkout>/ds-cli            # command entry
+~/.codex/agents/ds-agent.toml      -> <checkout>/ds-agent.toml     # Codex subagent
+~/.claude/skills/ds-cli/SKILL.md   -> <checkout>/SKILL.md          # Claude Code skill
 ```
 
-安装后，Codex 可以通过 `ds-agent` 使用这套入口；Claude Code 会通过 `~/.claude/skills/ds-cli/SKILL.md` 看到同一套静态 skill 说明。
+Then edit `~/.ds-cli/config.yaml` and set your token (see [Configure](#configure)).
 
-## 配置
+> Prefer to clone yourself? `git clone` the repo, `pip install pyyaml`, and run `./ds-cli install`.
 
-首次写入的 `~/.ds-cli/config.yaml` 大致如下：
+## Update
+
+```bash
+ds-cli update
+```
+
+Pulls the latest source into the checkout and refreshes the links.
+
+## Configure
+
+`~/.ds-cli/config.yaml` holds **only your overrides** — the bundled defaults (models, backend template, system prompt) are layered underneath automatically, so this file never needs to reference the source tree.
+
+Minimal working config:
 
 ```yaml
-default_backend: default
-fast_backend: default
+default_backend: default   # backend for normal mode
+fast_backend: default      # backend for --fast
 
 backends:
   default:
     description: "DeepSeek API"
-    ANTHROPIC_AUTH_TOKEN: "<YOUR_TOKEN>"
-
-  # opencode:
-  #   description: "Local OpenCode proxy"
-  #   ANTHROPIC_BASE_URL: "http://127.0.0.1:4000"
-  #   ANTHROPIC_AUTH_TOKEN: "unused"
+    env:
+      ANTHROPIC_AUTH_TOKEN: "sk-your-token"
 ```
 
-默认配置使用 DeepSeek Anthropic endpoint：
+The default endpoint is `https://api.deepseek.com/anthropic`. While the token is still the `<YOUR_TOKEN>` placeholder, `ds-cli run` fails before calling anything.
 
-```text
-https://api.deepseek.com/anthropic
-```
-
-你至少需要把 `<YOUR_TOKEN>` 改成真实 token。只要 token 仍然以 `<` 开头，`ds-cli run` 会在真正调用 `claude` 前直接报错，不会创建新的 run 记录。
-
-`default_backend` 是普通模式使用的配置；`fast_backend` 是加 `--fast` 时使用的配置。命令行不提供 `--backend`，用户只需要在配置文件里决定普通模式和快速模式分别指向哪个 backend。
-
-最小可用配置通常是：
-
-```yaml
-default_backend: default
-fast_backend: default
-
-backends:
-  default:
-    description: "DeepSeek API"
-    ANTHROPIC_AUTH_TOKEN: "sk-your-token"
-```
-
-如果你要默认走本地 OpenCode proxy，可以自己添加 `opencode` 并切换指向：
+To route through a local OpenCode proxy instead, add a backend and repoint:
 
 ```yaml
 default_backend: opencode
@@ -84,34 +89,39 @@ fast_backend: default
 
 backends:
   default:
-    description: "DeepSeek API"
-    ANTHROPIC_AUTH_TOKEN: "sk-your-token"
-
+    env:
+      ANTHROPIC_AUTH_TOKEN: "sk-your-token"
   opencode:
     description: "Local OpenCode proxy"
-    ANTHROPIC_BASE_URL: "http://127.0.0.1:4000"
-    ANTHROPIC_AUTH_TOKEN: "unused"
+    env:
+      ANTHROPIC_BASE_URL: "http://127.0.0.1:4000"   # see github.com/iTzFaisal/oc-cc-proxy
+      ANTHROPIC_AUTH_TOKEN: "unused"
 ```
 
-`http://127.0.0.1:4000` 背后的 proxy 可以参考：
+Every overridable field (`default_model` / `pro_model` / `backend_template` / `system_prompt`, …) lives in `cli/default_config.yaml`. There is no `--backend` flag — which backend normal/fast mode uses is decided by `default_backend` / `fast_backend`.
 
-```text
-https://github.com/iTzFaisal/oc-cc-proxy/
-```
+## CLI reference
 
-## 使用
-
-常用入口只需要区分普通模式和快速模式：
+You normally invoke ds-cli through the skill/subagent, but it's a plain CLI underneath:
 
 ```bash
-ds-cli run --cwd /path/to/project prompt.txt
-ds-cli run --fast --cwd /path/to/project prompt.txt
-ds-cli run --text "hi"
+ds-cli run --cwd /path/to/project prompt.txt   # dispatch a task from a file
+ds-cli run - <<'EOF'                            # …or from stdin
+Refactor module X and add tests
+EOF
+ds-cli run --text "hi"                          # smoke-test your config
+
+ds-cli run --pro  prompt.txt                    # use pro_model for harder tasks
+ds-cli run --fast prompt.txt                    # use fast_backend (combinable with --pro)
+
+ds-cli list                                     # list past tasks; view full prompt / result
+ds-cli go   [<run-id|seq>]                      # resume a session with the backend
+ds-cli tail [<run-id|seq>]                      # live-tail a run's output stream
 ```
 
-运行记录、prompt、进度和结果会写到：
+A run id looks like `ds-<SEQ>-<MMDD>` (SEQ is a daily counter `01..99` / `A0..ZZ`). Each run persists `.prompt.txt`, `.out.txt` (progress), and `.result.md` (final result) under:
 
 ```text
-~/.ds-cli/runs/
-~/.ds-cli/tasks/
+~/.ds-cli/runs/     # per-run metadata / stream
+~/.ds-cli/tasks/    # .prompt.txt / .out.txt / .result.md
 ```

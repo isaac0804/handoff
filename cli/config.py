@@ -29,8 +29,12 @@ except ImportError:
     sys.exit(1)
 
 _DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "default_config.yaml")
-_DEFAULT_USER_CONFIG = """# ds-cli user configuration
-include: {default_config_path}
+_DEFAULT_USER_CONFIG = """# ds-cli user configuration — overrides only.
+#
+# Bundled defaults (models, backend_template, system_prompt) are layered
+# underneath this file automatically; you never need to point at the source
+# tree. To see everything you can override, read cli/default_config.yaml in
+# the ds-cli repo. Use `include:` only for your own extra config files.
 
 default_backend: default
 fast_backend: default
@@ -80,9 +84,7 @@ def write_default_user_config() -> bool:
         return False
 
     try:
-        content = _DEFAULT_USER_CONFIG.format(
-            default_config_path=_DEFAULT_CONFIG_PATH,
-        )
+        content = _DEFAULT_USER_CONFIG
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             f.write(content)
@@ -178,15 +180,6 @@ def _load_with_includes(path: str, _seen: Optional[set] = None) -> dict:
     # Then deep-merge current file's own keys on top
     merged = _deep_merge(merged, data)
 
-    # Back-compat shim: if this file had no include, and the merged result
-    # lacks backend_template, implicitly include the bundled defaults.
-    if not includes and "backend_template" not in merged:
-        default_path = os.path.realpath(_DEFAULT_CONFIG_PATH)
-        if default_path not in _seen:
-            _seen.add(default_path)
-            defaults = _load_yaml(default_path)
-            merged = _deep_merge(defaults, merged)
-
     return merged
 
 
@@ -195,7 +188,12 @@ class Config:
 
     def __init__(self):
         _ensure_user_config_exists()
-        self._merged = _load_with_includes(user_config_path())
+        # Bundled defaults are always the base layer; the user config
+        # (with any of its own includes) is merged on top. The user config
+        # never needs to reference the source tree.
+        defaults = _load_yaml(_DEFAULT_CONFIG_PATH)
+        user = _load_with_includes(user_config_path())
+        self._merged = _deep_merge(defaults, user)
         self._validate()
 
     @property

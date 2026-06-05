@@ -10,7 +10,8 @@ def usage(config=None):
     print(
         """usage:
   ds-cli --help
-  ds-cli install
+  ds-cli install    [-y|--yes]
+  ds-cli update
   ds-cli list       [--uuid] [--cwd]
   ds-cli run        [--cwd <dir>] [--fast] [--pro] (<input-file|-> | --text <prompt...>)
   ds-cli go   [<run-id|seq>] [--backend <name>]
@@ -52,11 +53,17 @@ def main():
         cmd_install(rest)
         return
 
+    if subcmd == "update":
+        from .commands.update import cmd_update
+
+        cmd_update(rest)
+        return
+
     known = {"run", "list", "go", "tail"}
     if subcmd not in known:
         print(
             f"ds-cli: unknown subcommand '{subcmd}' — expected: "
-            f"install, list, run, go, tail",
+            f"install, update, list, run, go, tail",
             file=sys.stderr,
         )
         usage()
