@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import TextIO
 
 
-@dataclass(slots=True)
+@dataclass
 class ParsedEvent:
     """One parsed event extracted from a JSONL line."""
 

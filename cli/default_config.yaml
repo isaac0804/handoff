@@ -21,7 +21,7 @@ backend_template:
   env:
     ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic"
     ANTHROPIC_MODEL: "{model}"
-    CLAUDE_CONFIG_DIR: "{home}/.claude2"
+    CLAUDE_CONFIG_DIR: "{home}/.claude"
     ANTHROPIC_DEFAULT_OPUS_MODEL: "{pro_model}"
     ANTHROPIC_DEFAULT_SONNET_MODEL: "{default_model}"
     ANTHROPIC_DEFAULT_HAIKU_MODEL: "deepseek-v4-flash"

@@ -153,7 +153,7 @@ backends:
 curl -fsSL https://raw.githubusercontent.com/dazuiba/ds-cli/main/install-online.sh | bash
 ```
 
-Requires Python 3.10+ and git. The install script links ds-cli into the locations where Claude Code, Codex, and the shell each look:
+Requires Python 3.9+ and git. The install script links ds-cli into the locations where Claude Code, Codex, and the shell each look:
 
 ```text
 ~/bin/ds-cli                       -> <checkout>/ds-cli            # command entry point

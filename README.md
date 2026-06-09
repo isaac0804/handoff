@@ -39,6 +39,7 @@
 | | Claude Code | Codex |
 | --- | --- | --- |
 | 提示词 | "让 `/ds-cli` 执行上述任务" | "让 `ds-agent` 执行上述任务" |
+| 续接提示词 | "接着上次那个任务继续:<后续需求>" | "让 `ds-agent` 接着上次继续:<后续需求>" |
 | 机制 | 直接触发 `ds-cli` 命令(后台 shell) | 拉起 subagent 后台执行 |
 | 看进度 | 展开后台 shell view 或 ds-cli tail | ds-cli tail |
 
@@ -73,6 +74,17 @@ Codex 会拉起 subagent 在后台阻塞执行;为避免把大段结果读进 su
 <img src="assets/codex.jpg" width="621" alt="Codex 唤起 ds-agent subagent">
 
 这就是全部思路:旗舰模型负责拆解与验收,DeepSeek V4 负责廉价地执行。
+
+## 续接上次会话,接着派任务
+
+每次 `ds-cli` 任务底层都对应一个 claude 会话。你不必每次都从零开始——直接说"接着上次那个任务继续:<后续需求>",agent 就会把后续任务**派发到同一个会话**,保留前面的全部上下文(改过的文件、读过的代码、已有结论),而不是开一个一无所知的新会话。
+
+- **稳定句柄**:每次派发的 `RESULT=` 路径里都带着 run_id(如 `ds-0608-07`);续接只认这个 run_id,且多轮续接始终用**最初那个**——会话 id 不会变。
+- **两端通用**:Claude Code(`/ds-cli`)和 Codex(`ds-agent`)都支持,agent 会自动从上一次的 `RESULT=` 找到要续接的会话。
+- **命令行直连**:也可以自己用 `ds-cli resume <seq> - <<'EOF' ... EOF` 非交互派发后续任务,或 `ds-cli resume <seq>` 用 backend 把那次会话重新加载、接着交互聊。
+
+<!-- 替换为: assets/resume.jpg — 建议 621 宽 — 展示"接着上次继续"派发:主 session 引用上一条 RESULT= 的 run_id,续派后拿到新的 RESULT=,且结果体现上下文被保留。 -->
+<img src="assets/resume.jpg" width="621" alt="续接上次会话继续派发任务">
 
 ## 查看与接管运行中的任务
 
@@ -154,7 +166,7 @@ backends:
 curl -fsSL https://raw.githubusercontent.com/dazuiba/ds-cli/main/install-online.sh | bash
 ```
 
-需要 Python 3.10+ 和 git。安装脚本会把 ds-cli 链接到 Claude Code、Codex 和 shell 各自查找的位置:
+需要 Python 3.9+ 和 git。安装脚本会把 ds-cli 链接到 Claude Code、Codex 和 shell 各自查找的位置:
 
 ```text
 ~/bin/ds-cli                       -> <checkout>/ds-cli            # 命令入口

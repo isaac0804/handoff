@@ -1,5 +1,7 @@
 """ds-cli list command."""
 
+import os
+import subprocess
 import sys
 
 from ..core import get_db, format_run_row
@@ -36,23 +38,23 @@ def cmd_list(argv: list[str], config: Config):
         return
 
     if sys.stdin.isatty() and sys.stdout.isatty():
-        from ..tui import RunListApp
-
-        def _refresh_rows():
-            """Re-query the DB for the latest 50 runs.  Called by the TUI timer."""
-            return conn.execute(
-                "SELECT seq, run_id, uuid, cwd, prompt, created_at, jsonl_path, status, backend "
-                "FROM runs ORDER BY created_at DESC LIMIT 50"
-            ).fetchall()
-
-        app = RunListApp(rows, full_cwd, refresh_fn=_refresh_rows)
-        app.run(mouse=False)
         conn.close()
 
-        if app.action_result and app.action_result.startswith("resume:"):
-            run_id = app.action_result[len("resume:"):]
-            from .resume import cmd_resume
-            cmd_resume([run_id], config)
+        # Find the TUI launcher script relative to this file.
+        _repo_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..")
+        )
+        tui_script = os.path.join(_repo_root, "ds-cli-tui")
+
+        tui_args = ["uv", "run", "--script", tui_script]
+        if full_cwd:
+            tui_args.append("--cwd")
+
+        # Launch as subprocess, inheriting the tty.  The child owns the
+        # terminal for the lifetime of the TUI.  If the user triggers a
+        # resume, the child handles it directly (os.execvp → claude), so
+        # there is nothing to pass back to this parent process.
+        subprocess.run(tui_args, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
         return
 
     conn.close()

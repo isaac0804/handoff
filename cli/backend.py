@@ -58,7 +58,7 @@ def set_backend_env(backend: dict, default_model: str, pro_model: str, model: st
     if "CLAUDE_CONFIG_DIR" not in os.environ or not os.environ["CLAUDE_CONFIG_DIR"]:
         os.environ["CLAUDE_CONFIG_DIR"] = os.environ.get(
             "CLAUDE_CONFIG_DIR",
-            os.path.expanduser("~/.claude2"),
+            os.path.expanduser("~/.claude"),
         )
 
 
