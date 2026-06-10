@@ -40,8 +40,8 @@ cli/skills/
 
 | 文件 | 动作 |
 | --- | --- |
-| `README.md` | 用 `readmev2.md` 整体替换。替换后逐节核对与实现一致：`--backend` 拼写、`handoff init`、`uv tool install handoff-cli`、`hd-` 前缀、表格里的模型名与 `cli/default_config.yaml` 实际值一致。完成后删除 `readmev2.md` |
-| `README.EN.md` | 按新 README.md 重写英文版（结构一一对应，不是逐句直译，标语可意译） |
+| `README.md` | **英文为主 README**（PyPI 项目页与 GitHub 门面渲染它）：内容取自现成的 `README.EN.md`（已由主会话翻译定稿，不要重写，只逐节核对与实现一致：flag 拼写、`handoff init`、模型名与 `cli/default_config.yaml` 实际值、`hd-` 前缀）。完成后删除 `README.EN.md` |
+| `README.zh-CN.md` | 中文版：内容取自现成的 `readmev2.md`（同样只核对一致性，不要改写文案）。完成后删除 `readmev2.md`。两个版本结构必须逐节一一对应，顶部互链（英文版链 `README.zh-CN.md`，中文版链 `README.md`）已在文内写好 |
 | `CLAUDE.md` | 全面重写：项目定位改为多 backend 调度（What handoff is）；Commands、Architecture（含 type_defaults、parser 抽象、init/迁移）、Key constraints 全部对齐新实现。Key constraints 里删除 "No --backend flag" 等过时条目 |
 | `docs/cli-reference.zh-CN.md` | 重写：`run` / `resume` / `list` / `tail` / `init` 五个命令 + `--backend`/`--pro` 标志；删除 install/update/`--fast`；run id 编码、落盘布局更新为 `~/.handoff/` 与 `hd-` 前缀 |
 | `docs/configuration.zh-CN.md` | 重写：`type_defaults` 合并机制（注明列表是整体替换不拼接）、三个内置 backend 与"最小配置只需 token / 或用 `${DEEPSEEK_API_KEY}` 环境变量插值"、自定义 backend 示例（再加一个 anthropic 兼容端点的例子）、include 机制保留；删除 backend_template / fast_backend |
