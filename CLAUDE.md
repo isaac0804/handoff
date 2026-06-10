@@ -65,7 +65,7 @@ Functions that set environment variables and build `claude` CLI argument lists f
 1. Spawns `claude` (with PTY wrapper) as a subprocess, stdout captured
 2. For each JSONL line from claude: writes line to `.jsonl` file, parses assistant plan text for stderr progress, writes progress to `.out.txt`
 3. On `type: "result"` with `is_error: false`, extracts result text → writes `.result.md`; default mode also prints the result text to stdout
-4. Default mode prints `RESULT=<abs-path-to-result.md>` to both stdout and stderr at startup; `run --from codex` suppresses progress/result terminal output and prints only `RESULT=<path>` after completion
+4. `run` prints `RESULT=<abs-path-to-result.md>` to both stdout and stderr at startup; stderr carries progress and a final `RESULT=` marker, while stdout prints the final result text for normal shell users
 
 ### Resume / continuation (`cli/commands/resume.py`)
 
@@ -73,7 +73,7 @@ Functions that set environment variables and build `claude` CLI argument lists f
 - **No prompt input** → interactive: `build_resume_args()` + `os.execvp` into `claude --resume` (the old `go` behavior).
 - **With prompt input** (`-`/heredoc, `--text`, or a file arg after the selector) → non-interactive continuation: calls `run._execute(..., resume_session_id=session_id)`, which allocates a *new* run row (new run_id/seq/files) carrying the parent's `session_id`, then runs the normal `execute_run` pipeline with `claude -p <prompt> --resume <session_id>`.
 
-Because `--resume` does not fork, the session_id is stable, so the **original seq stays a valid handle** for every later turn. Flags mirror `run` (`--fast`/`--pro`/`--from codex`/`--cwd`); backend defaults to the conversation's saved backend unless `--fast` overrides. There is no separate `go` command.
+Because `--resume` does not fork, the session_id is stable, so the **original seq stays a valid handle** for every later turn. Flags mirror `run` (`--fast`/`--pro`/`--cwd`); backend defaults to the conversation's saved backend unless `--fast` overrides. There is no separate `go` command.
 
 ### TUI (`cli/tui.py`)
 
@@ -82,7 +82,7 @@ Textual-based interactive listing for `ds-cli list`. Renders a scrollable `DataT
 ### Skill/subagent files
 
 - `SKILL.md` — Claude Code skill definition with an interaction contract (heredoc template, always `run_in_background: true`, capture `RESULT=` path, read `.result.md` on completion)
-- `ds-agent.toml` — Codex subagent definition (model, instructions to forward everything via `ds-cli run --from codex -` heredoc)
+- `ds-agent.toml` — Codex subagent definition (model, instructions to forward the prompt file via `ds-cli run <prompt-file> >/dev/null`, preserving stderr progress while dropping final stdout result text)
 
 ### Default config (`cli/default_config.yaml`)
 

@@ -13,8 +13,8 @@ def usage(config=None):
   ds-cli install    [-y|--yes]
   ds-cli update
   ds-cli list       [--uuid] [--cwd]
-  ds-cli run        [--cwd <dir>] [--fast] [--pro] [--from codex] (<input-file|-> | --text <prompt...>)
-  ds-cli resume     [<run-id|seq>] [--fast] [--pro] [--from codex] [--cwd <dir>] [(<input-file|-> | --text <prompt...>)]
+  ds-cli run        [--cwd <dir>] [--fast] [--pro] (<input-file|-> | --text <prompt...>)
+  ds-cli resume     [<run-id|seq>] [--fast] [--pro] [--cwd <dir>] [(<input-file|-> | --text <prompt...>)]
   ds-cli tail [<run-id|seq>]
 
   ds-cli list             — browse and inspect your past sessions
@@ -26,8 +26,7 @@ def usage(config=None):
 Run ids: ds-<MMDD>-<SEQ_CODE>  (seq_code: daily counter, 01..99, A0..ZZ)
 --cwd defaults to the current directory of the calling process.
 --fast uses fast_backend from ~/.ds-cli/config.yaml.
---pro uses the pro model profile on the selected backend.
---from codex prints only RESULT=<path> after completion, for Codex subagents."""
+--pro uses the pro model profile on the selected backend."""
     )
 
 

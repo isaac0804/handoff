@@ -47,8 +47,7 @@ Have your agent draw up a plan first, then hand execution to ds-cli.
 <br>
 
 - **Claude Code has excellent background-shell support**: it can sense a task's "completion" via **notification**, and watch progress in real time (stderr). So you just run `ds-cli` in a background shell — the main session is never blocked and barely spends any tokens.
-- **Codex has no notifications, only polling**: every poll costs one cache read of the main session, which burns a lot of tokens for tasks that easily take 5–10 minutes. But Codex can sense a **subagent's completion event** — so we instead use a cheap model (`gpt-5.4-low`) as the subagent, call `ds-cli run --from codex` in a **blocking** fashion, and return only one `RESULT=` path to the main session after completion.
-  - Why not the even cheaper `gpt-5.4-mini`? Its instruction-following is too poor — it does the work itself instead of dutifully handing the task off to ds-cli.
+- **Codex has no notifications, only polling**: every poll costs one cache read of the main session, which burns a lot of tokens for tasks that easily take 5–10 minutes. But Codex can sense a **subagent's completion event** — so we instead use a cheap `gpt-5.4-mini` low-effort subagent and call `ds-cli run ... >/dev/null` in a **blocking** fashion. stderr keeps streaming progress so the subagent is not silent for minutes, stdout's final result body is discarded, and only one `RESULT=` path is returned to the main session after completion.
 
 </details>
 
@@ -66,7 +65,7 @@ Each task is dispatched as a **background shell command**; click to watch ds-cli
 
 > Make a plan, and have `ds-agent` execute the above task.
 
-Codex spins up a subagent to run in the background. To avoid pulling large results into the subagent context, `ds-agent` returns only one `RESULT=` line after completion; use `ds-cli tail` when you need progress.
+Codex spins up a subagent to run in the background. To avoid pulling large results into the subagent context, `ds-agent` discards stdout's final result body and returns only one `RESULT=` line after completion; stderr progress keeps the subagent from sitting silent, and `ds-cli tail` is still available when you need to inspect progress directly.
 
 <!-- replace with: assets/codex.jpg — suggested 621 wide — re-shoot a full image where the text isn't cut off on the right. -->
 <img src="assets/codex.jpg" width="621" alt="Codex invoking the ds-agent subagent">

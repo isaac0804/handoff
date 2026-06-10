@@ -49,8 +49,7 @@
 <br>
 
 - **Claude Code 对后台 shell 支持极好**:能以**通知**方式感知任务"完成",还能实时看进度(stderr)。所以直接把 `ds-cli` 跑在后台 shell 即可,主 session 全程不阻塞、也几乎不耗 token。
-- **Codex 不支持通知,只能轮询**:每轮询一次就消耗一次主 session 的 cache read,对动辄 5~10 分钟的任务会烧掉大量 token。但 Codex 能感知 **subagent 的完成事件**——所以改用一个廉价模型(`gpt-5.4-low`)做 subagent,**阻塞式**调用 `ds-cli run --from codex`,直到结束才把一行 `RESULT=` 路径带回主 session。
-  - 为什么不用更便宜的 `gpt-5.4-mini`?它指令遵循太差,会自己动手干活,而不是老老实实把任务派给 ds-cli。
+- **Codex 不支持通知,只能轮询**:每轮询一次就消耗一次主 session 的 cache read,对动辄 5~10 分钟的任务会烧掉大量 token。但 Codex 能感知 **subagent 的完成事件**——所以改用一个廉价的 `gpt-5.4-mini` low-effort subagent,**阻塞式**调用 `ds-cli run ... >/dev/null`。stderr 会持续输出进度避免 subagent 长时间静默,stdout 的最终正文被丢弃,结束后只把一行 `RESULT=` 路径带回主 session。
 
 </details>
 
@@ -68,7 +67,7 @@
 
 > 制定计划,并让 `ds-agent` 执行上述任务。
 
-Codex 会拉起 subagent 在后台阻塞执行;为避免把大段结果读进 subagent 上下文,`ds-agent` 只在结束时带回一行 `RESULT=`。需要看进度时用 `ds-cli tail`。
+Codex 会拉起 subagent 在后台阻塞执行;为避免把大段结果读进 subagent 上下文,`ds-agent` 丢弃 stdout 的最终正文,只在结束时带回一行 `RESULT=`。执行中的 stderr 进度会留给 subagent 防止长时间静默,需要主动查看时也可以用 `ds-cli tail`。
 
 <!-- 替换为: assets/codex.jpg — 建议 621 宽 — 重拍一张文字不被右侧截断的完整图。 -->
 <img src="assets/codex.jpg" width="621" alt="Codex 唤起 ds-agent subagent">

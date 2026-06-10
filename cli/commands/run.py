@@ -19,10 +19,9 @@ from ..config import Config
 
 
 def cmd_run(argv: list[str], config: Config):
-    """ds-cli run [--cwd <dir>] [--fast] [--pro] [--from codex] (<input-file|-> | --text <prompt...>)."""
+    """ds-cli run [--cwd <dir>] [--fast] [--pro] (<input-file|-> | --text <prompt...>)."""
     fast = False
     pro = False
-    caller = ""
     cwd = ""
     input_src = ""
     text_mode = False
@@ -42,20 +41,6 @@ def cmd_run(argv: list[str], config: Config):
         elif a == "--backend":
             print("ds-cli: --backend has been removed; use --fast or edit ~/.ds-cli/config.yaml", file=sys.stderr)
             sys.exit(2)
-        elif a == "--from":
-            i += 1
-            if i >= len(argv):
-                print("ds-cli run: --from requires a value", file=sys.stderr)
-                sys.exit(2)
-            caller = argv[i]
-            if caller != "codex":
-                print("ds-cli run: --from currently supports: codex", file=sys.stderr)
-                sys.exit(2)
-        elif a.startswith("--from="):
-            caller = a.split("=", 1)[1]
-            if caller != "codex":
-                print("ds-cli run: --from currently supports: codex", file=sys.stderr)
-                sys.exit(2)
         elif a == "--text":
             text_mode = True
             if input_src:
@@ -128,7 +113,7 @@ def cmd_run(argv: list[str], config: Config):
 
     backend_name = config.fast_backend if fast else config.default_backend
 
-    _execute(cwd, prompt_text, backend_name, pro, caller, config)
+    _execute(cwd, prompt_text, backend_name, pro, config)
 
 
 def _execute(
@@ -136,7 +121,6 @@ def _execute(
     prompt_text: str,
     backend_name: str,
     pro: bool,
-    caller: str,
     config: Config,
     resume_session_id: str | None = None,
 ):
@@ -181,14 +165,12 @@ def _execute(
     else:
         session_id = uid if UUID_RE.match(uid) else None
 
-    codex_mode = caller == "codex"
-    if not codex_mode:
-        print(f"RESULT={result_path}")
-        print(f"RESULT={result_path}", file=sys.stderr)
+    print(f"RESULT={result_path}")
+    print(f"RESULT={result_path}", file=sys.stderr)
 
-        ts = datetime.datetime.now().strftime("%H:%M:%S")
-        label = "resume" if resume_session_id else "start"
-        print(f"{ts} {label}\tSESSION={session_id}", file=sys.stderr)
+    ts = datetime.datetime.now().strftime("%H:%M:%S")
+    label = "resume" if resume_session_id else "start"
+    print(f"{ts} {label}\tSESSION={session_id}", file=sys.stderr)
 
     # build claude command (wrapped in script for pty)
     claude_cmd = build_claude_args(
@@ -208,5 +190,4 @@ def _execute(
         uid,
         jsonl_path,
         (prompt_path, out_path, result_path),
-        caller=caller,
     )

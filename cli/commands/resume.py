@@ -22,11 +22,10 @@ from ..config import Config
 
 
 def cmd_resume(argv: list[str], config: Config):
-    """ds-cli resume [<run-id|seq>] [--fast] [--pro] [--from codex] [--cwd <dir>]
+    """ds-cli resume [<run-id|seq>] [--fast] [--pro] [--cwd <dir>]
     [(<input-file|-> | --text <prompt...>)]."""
     fast = False
     pro = False
-    caller = ""
     cwd = ""
     selector = ""
     input_src = ""
@@ -48,20 +47,6 @@ def cmd_resume(argv: list[str], config: Config):
         elif a == "--backend":
             print("ds-cli: --backend has been removed; use --fast or edit ~/.ds-cli/config.yaml", file=sys.stderr)
             sys.exit(2)
-        elif a == "--from":
-            i += 1
-            if i >= len(argv):
-                print("ds-cli resume: --from requires a value", file=sys.stderr)
-                sys.exit(2)
-            caller = argv[i]
-            if caller != "codex":
-                print("ds-cli resume: --from currently supports: codex", file=sys.stderr)
-                sys.exit(2)
-        elif a.startswith("--from="):
-            caller = a.split("=", 1)[1]
-            if caller != "codex":
-                print("ds-cli resume: --from currently supports: codex", file=sys.stderr)
-                sys.exit(2)
         elif a == "--text":
             text_mode = True
             if input_src:
@@ -156,7 +141,7 @@ def cmd_resume(argv: list[str], config: Config):
         # Non-interactive: dispatch a new turn through the run pipeline.
         conn.close()
         from .run import _execute
-        _execute(cwd, prompt_text, backend_name, pro, caller, config, resume_session_id=session_id)
+        _execute(cwd, prompt_text, backend_name, pro, config, resume_session_id=session_id)
 
 
 def _resume_interactive(config: Config, backend_name: str, session_id: str, cwd: str, pro: bool):

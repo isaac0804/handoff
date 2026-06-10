@@ -17,7 +17,6 @@ def execute_run(
     uid: str,
     jsonl_path: str,
     task_paths_tuple,
-    caller: str = "",
 ):
     """Execute a claude run: pipe output to JSONL, display progress, extract result.
 
@@ -27,21 +26,24 @@ def execute_run(
     ["script", "-q", "/dev/null", "claude", ...] (wrapping happens in the command function).
     """
     _, out_path, result_path = task_paths_tuple
-    codex_mode = caller == "codex"
 
     def update_status(status: str):
         conn.execute("UPDATE runs SET status = ? WHERE uuid = ?", (status, uid))
         conn.commit()
 
+    def emit_result_marker():
+        disp = f"RESULT={result_path}"
+        print(disp, file=sys.stderr, flush=True)
+        with open(out_path, "a") as of:
+            of.write(disp + "\n")
+
     def finish_success(result_text: str):
         update_status("success")
-        conn.close()
         with open(result_path, "w") as rf:
             rf.write(result_text)
-        if codex_mode:
-            print(f"RESULT={result_path}")
-        else:
-            print(result_text)
+        emit_result_marker()
+        conn.close()
+        print(result_text)
         sys.exit(0)
 
     proc = subprocess.Popen(
@@ -58,6 +60,21 @@ def execute_run(
         with open(jsonl_path, "w") as jf, open(out_path, "w") as of:
             last_ts = ""
             last_plan = ""
+            pending_plan: tuple[str, str] | None = None
+
+            def flush_pending():
+                nonlocal last_plan, pending_plan
+                if not pending_plan:
+                    return
+                ts, plan_text = pending_plan
+                pending_plan = None
+                if not plan_text or plan_text == last_plan:
+                    return
+                disp = f"{ts} {plan_text}"
+                print(disp, file=sys.stderr, flush=True)
+                of.write(disp + "\n")
+                of.flush()
+                last_plan = plan_text
 
             for line_bytes in proc.stdout:
                 try:
@@ -76,22 +93,26 @@ def execute_run(
                     if event.ts:
                         last_ts = event.ts
 
+                    if event.kind == "result":
+                        pending_plan = None
+                        continue
+
                     if event.kind == "result_text" and event.text:
+                        pending_plan = None
                         result = event.text
                         result_seen = True
                         continue
 
                     plan_text = format_event_for_stream(event)
-                    if not plan_text or plan_text == last_plan:
+                    if not plan_text:
+                        flush_pending()
                         continue
 
+                    flush_pending()
                     ts = event.ts or datetime.datetime.now().strftime("%H:%M:%S")
-                    disp = f"{ts} {plan_text}"
-                    if not codex_mode:
-                        print(disp, file=sys.stderr, flush=True)
-                    of.write(disp + "\n")
-                    of.flush()
-                    last_plan = plan_text
+                    pending_plan = (ts, plan_text)
+
+            flush_pending()
 
     except KeyboardInterrupt:
         proc.send_signal(signal.SIGINT)
@@ -103,10 +124,8 @@ def execute_run(
         update_status("interrupted")
         with open(result_path, "w") as rf:
             rf.write("INTERRUPTED\n")
-        if codex_mode:
-            print(f"RESULT={result_path}")
-        else:
-            print("\nds-cli run: interrupted", file=sys.stderr)
+        emit_result_marker()
+        print("\nds-cli run: interrupted", file=sys.stderr)
         conn.close()
         sys.exit(130)
 
@@ -121,12 +140,10 @@ def execute_run(
 
     update_status("error")
     diag = f"ds-cli run: no successful result found; exit status {proc.returncode}\nJSONL={jsonl_path}\n"
-    if not codex_mode:
-        print(diag.rstrip(), file=sys.stderr)
-        print(f"JSONL={jsonl_path}", file=sys.stderr)
+    print(diag.rstrip(), file=sys.stderr)
+    print(f"JSONL={jsonl_path}", file=sys.stderr)
     with open(result_path, "w") as rf:
         rf.write(diag)
-    if codex_mode:
-        print(f"RESULT={result_path}")
+    emit_result_marker()
     conn.close()
     sys.exit(1)
