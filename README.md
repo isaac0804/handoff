@@ -140,6 +140,15 @@ Dispatching and resuming are the AI's job (`handoff run` / `handoff resume` unde
 </details>
 
 <details>
+<summary><b>Can I change the TUI theme?</b></summary>
+
+<br>
+
+Yes. Inside `handoff list` and `handoff tail`, press `D` to toggle between `textual-dark` and `textual-light`. Your choice is saved automatically to `~/.handoff/tui_state.json` and restored next time you run the TUI.
+
+</details>
+
+<details>
 <summary><b>Can I dispatch several tasks at once?</b></summary>
 
 <br>

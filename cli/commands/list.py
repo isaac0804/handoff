@@ -47,7 +47,8 @@ def cmd_list(argv: list[str], config: Config):
                 "FROM runs ORDER BY created_at DESC LIMIT 50"
             ).fetchall()
 
-        app = RunListApp(rows, full_cwd, refresh_fn=_refresh_rows)
+        from ..config import read_tui_theme
+        app = RunListApp(rows, full_cwd, refresh_fn=_refresh_rows, theme_name=read_tui_theme())
         app.run(mouse=False)
         conn.close()
 

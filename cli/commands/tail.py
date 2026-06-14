@@ -44,5 +44,6 @@ def cmd_tail(argv: list[str], config=None):
         "out_path": out_path,
     }
 
+    from ..config import read_tui_theme
     from ..jsonl_viewer import run_tail
-    run_tail(jsonl_path, prompt_path, result_path, run_info)
+    run_tail(jsonl_path, prompt_path, result_path, run_info, theme_name=read_tui_theme())

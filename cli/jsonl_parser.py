@@ -7,6 +7,8 @@ import json
 from dataclasses import dataclass
 from typing import TextIO
 
+from rich.text import Text
+
 
 @dataclass
 class ParsedEvent:
@@ -158,6 +160,46 @@ def format_event_for_viewer(event: ParsedEvent) -> str | None:
         "info": "·",
     }.get(event.kind, " ")
     return f"`{ts}` {kind_mark} {_truncate(event.text)}"
+
+
+def format_event_as_rich(event: ParsedEvent) -> Text | None:
+    """Format one parsed event as a rich Text with styled spans.
+
+    Returns None for result_text/error_text events (handled separately by
+    the viewer as Markdown content).  The returned Text uses colour/emphasis
+    per kind: tool=cyan, text=default, result=green, error=red, task=yellow,
+    info=dim.
+    """
+    if event.kind in ("result_text", "error_text"):
+        return None
+
+    ts = event.ts or " " * 8
+    mark_map = {
+        "tool": "▷",
+        "text": "✎",
+        "result": "✓",
+        "error": "✗",
+        "task": "▶",
+        "info": "·",
+    }
+    colour_map = {
+        "tool": "cyan",
+        "text": "",
+        "result": "green",
+        "error": "red",
+        "task": "yellow",
+        "info": "dim",
+    }
+    mark = mark_map.get(event.kind, " ")
+    colour = colour_map.get(event.kind, "")
+
+    text = Text()
+    text.append(f"{ts:8}", style="dim")
+    text.append(" │ ", style="dim")
+    text.append(mark, style=colour)
+    text.append(" ")
+    text.append(_truncate(event.text))
+    return text
 
 
 def format_event_for_stream(event: ParsedEvent) -> str | None:

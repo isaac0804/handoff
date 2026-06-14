@@ -1,7 +1,7 @@
 """Shared JSONL viewer for handoff list (detail) and tail commands.
 
-Uses Textual to render Claude stream-json output: compact progress log,
-input prompt (markdown), and final result (markdown). No external cclean dependency.
+Uses Textual to render Claude stream-json output: compact progress log
+(RichLog), input prompt (Markdown), and final result (Markdown).
 
 Modes:
   - static:  list detail page; Escape dismisses back to list
@@ -11,26 +11,53 @@ Modes:
 from __future__ import annotations
 
 import os
+import re
 import asyncio
 from typing import Optional
 
+from markdown_it import MarkdownIt
+from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.screen import Screen
 from textual.widgets import (
     Footer,
+    Markdown,
+    RichLog,
+    Static,
     TabbedContent,
     TabPane,
-    Static,
 )
 from textual.containers import VerticalScroll
 from textual.binding import Binding
-from .jsonl_parser import ParsedEvent, format_event_for_viewer, read_events
+from .config import read_tui_theme
+from .jsonl_parser import ParsedEvent, format_event_as_rich, read_events
+from .tui import HandoffTuiApp
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # JsonlViewerScreen
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _markdown_parser_factory() -> MarkdownIt:
+    """Create a Markdown parser with all link/image/autolink tokens disabled.
+
+    Textual 2.1.2's Markdown renderer calls ``Style.from_meta({"@click": action})``
+    for every ``link_open`` / ``image`` token.  The resulting meta data can contain
+    arbitrary strings (e.g. ``/tmp/a:1`` from ``[x](/tmp/a:1)``) which crash
+    Python's marshal with ``ValueError: bad marshal data (unknown type code)``
+    downstream in Textual's render pipeline.
+
+    Disabling the relevant MarkdownIt rules ensures such tokens are never emitted
+    and the input is rendered as plain text instead.
+    """
+    md = MarkdownIt("gfm-like", options_update={"linkify": False})
+    # Explicit markdown links e.g. [text](...), images e.g. ![alt](...),
+    # and autolinks e.g. <https://...>
+    md.disable(["link", "image", "autolink"])
+    return md
+
 
 class JsonlViewerScreen(Screen):
     """Shared JSONL viewer screen for handoff list (detail) and tail.
@@ -42,22 +69,26 @@ class JsonlViewerScreen(Screen):
     """
 
     BINDINGS = [
+        # Tab navigation (shown)
+        Binding("tab", "next_tab", "Next", show=True),
+        Binding("shift+tab", "prev_tab", "Prev", show=True),
+        # Actions (shown, ordered by frequency of use)
         Binding("escape", "back", "← Back", show=True),
-        Binding("o", "go_resume", "Open in Claude", show=True),
-        Binding("c", "copy_session", "Copy Session", show=True),
+        Binding("o", "go_resume", "Open", show=True),
+        Binding("c", "copy_session", "Copy", show=True),
         Binding("q", "quit", "Quit", show=True),
-        Binding("tab", "next_tab", "Next Tab", show=True),
-        Binding("shift+tab", "prev_tab", "Prev Tab", show=True),
-        Binding("1", "show_tab('stream')", "Stream", show=True),
-        Binding("2", "show_tab('output')", "Output", show=True),
-        Binding("3", "show_tab('prompt')", "Prompt", show=True),
-        Binding("4", "show_tab('result')", "Result", show=True),
-        Binding("up,k", "scroll_active('up')", "Scroll up", show=False),
-        Binding("down,j", "scroll_active('down')", "Scroll down", show=False),
-        Binding("pageup", "scroll_active('page_up')", "Page up", show=False),
-        Binding("pagedown", "scroll_active('page_down')", "Page down", show=False),
-        Binding("home", "scroll_active('home')", "Top", show=False),
-        Binding("end", "scroll_active('end')", "Bottom", show=False),
+        # Numeric tab shortcuts (hidden from Footer, keys still work)
+        Binding("1", "show_tab('stream')", "", show=False),
+        Binding("2", "show_tab('output')", "", show=False),
+        Binding("3", "show_tab('prompt')", "", show=False),
+        Binding("4", "show_tab('result')", "", show=False),
+        # Scrolling (hidden — Textual built-in keymap covers these)
+        Binding("up,k", "scroll_active('up')", "", show=False),
+        Binding("down,j", "scroll_active('down')", "", show=False),
+        Binding("pageup", "scroll_active('page_up')", "", show=False),
+        Binding("pagedown", "scroll_active('page_down')", "", show=False),
+        Binding("home", "scroll_active('home')", "", show=False),
+        Binding("end", "scroll_active('end')", "", show=False),
     ]
 
     def __init__(
@@ -82,9 +113,8 @@ class JsonlViewerScreen(Screen):
         self._last_ts = ""
         self._fpos = 0
         self._out_fpos = 0
+        self._out_buffer = ""      # partial last line buffer for .out parsing
         self._result_text: Optional[str] = None
-        self._stream_raw = ""      # accumulated stream content for incremental update
-        self._out_raw = ""         # accumulated .out.txt content
         self._last_stream_line = ""
         self._poll_interval = 0.5
         # Auto-follow state
@@ -103,52 +133,68 @@ class JsonlViewerScreen(Screen):
         )
         with TabbedContent(initial="stream"):
             with TabPane("1 Stream JSONL", id="stream"):
-                with VerticalScroll(id="stream_scroll"):
-                    yield Static("Loading…", id="stream_text", markup=False)
+                yield RichLog(id="stream_log", auto_scroll=False, highlight=False, markup=False)
             with TabPane("2 Output .out", id="output"):
-                with VerticalScroll(id="output_scroll"):
-                    yield Static("Loading…", id="output_text", markup=False)
+                yield RichLog(id="output_log", auto_scroll=False, highlight=False, markup=False)
             with TabPane("3 Prompt", id="prompt"):
                 with VerticalScroll(id="prompt_scroll"):
-                    yield Static("", id="prompt_text", markup=False)
+                    yield Static("", id="prompt_header")
+                    yield Markdown(
+                        "",
+                        id="prompt_md",
+                        parser_factory=_markdown_parser_factory,
+                        open_links=False,
+                    )
             with TabPane("4 Result", id="result"):
                 with VerticalScroll(id="result_scroll"):
-                    yield Static("", id="result_text", markup=False)
+                    yield Static("", id="result_header")
+                    yield Markdown(
+                        "",
+                        id="result_md",
+                        parser_factory=_markdown_parser_factory,
+                        open_links=False,
+                    )
         yield Footer()
 
     def on_mount(self) -> None:
-        # Load prompt text
+        # ── Prompt tab ──────────────────────────────────────────────────────
         if os.path.isfile(self._p_path):
             try:
                 with open(self._p_path, "r", encoding="utf-8", errors="replace") as f:
                     pt = f.read().strip()
+                self.query_one("#prompt_header", Static).update(
+                    self._header_line("Prompt", self._p_path)
+                )
                 if pt:
-                    self.query_one("#prompt_text", Static).update(
-                        self._text_with_path("Prompt", self._p_path, pt)
-                    )
+                    self.query_one("#prompt_md", Markdown).update(pt)
             except (OSError, UnicodeDecodeError):
                 pass
         else:
-            self.query_one("#prompt_text", Static).update(self._text_with_path("Prompt", self._p_path, ""))
+            self.query_one("#prompt_header", Static).update(
+                self._header_line("Prompt", self._p_path)
+            )
 
-        # Load result text
+        # ── Result tab ──────────────────────────────────────────────────────
         if os.path.isfile(self._r_path):
             try:
                 with open(self._r_path, "r", encoding="utf-8", errors="replace") as f:
                     rt = f.read().strip()
+                self.query_one("#result_header", Static).update(
+                    self._header_line("Result", self._r_path)
+                )
                 if rt:
                     self._result_text = rt
-                    self.query_one("#result_text", Static).update(
-                        self._text_with_path("Result", self._r_path, rt)
-                    )
+                    self.query_one("#result_md", Markdown).update(rt)
             except (OSError, UnicodeDecodeError):
                 pass
         else:
-            self.query_one("#result_text", Static).update(self._text_with_path("Result", self._r_path, ""))
+            self.query_one("#result_header", Static).update(
+                self._header_line("Result", self._r_path)
+            )
 
-        # Load JSONL stream.
-        self._stream_raw = self._header_line("JSONL", self._jl_path)
-        self.query_one("#stream_text", Static).update(self._stream_raw)
+        # ── Stream tab ──────────────────────────────────────────────────────
+        stream_log = self.query_one("#stream_log", RichLog)
+        stream_log.write(Text(self._header_line("JSONL", self._jl_path), style="dim"))
         if os.path.isfile(self._jl_path):
             with open(self._jl_path, "r", encoding="utf-8", errors="replace") as f:
                 f.seek(self._fpos)
@@ -156,13 +202,14 @@ class JsonlViewerScreen(Screen):
                 self._fpos = f.tell()
             self._append_events(events)
 
-        self._out_raw = self._header_line("Output", self._o_path)
-        self.query_one("#output_text", Static).update(self._out_raw)
+        # ── Output tab ──────────────────────────────────────────────────────
+        out_log = self.query_one("#output_log", RichLog)
+        out_log.write(Text(self._header_line("Output", self._o_path), style="dim"))
         self._append_output_from_file()
 
         # Scroll to bottom after initial load
-        self._scroll_to_bottom("stream")
-        self._scroll_to_bottom("output")
+        stream_log.scroll_end(animate=False)
+        out_log.scroll_end(animate=False)
 
         # Start poll worker for all modes (live updates for running runs)
         self._poll_jsonl()
@@ -181,6 +228,8 @@ class JsonlViewerScreen(Screen):
                     self._append_events(events)
                 except (OSError, UnicodeDecodeError):
                     pass
+                except Exception:
+                    pass  # screen may have been unmounted
 
             self._append_output_from_file()
 
@@ -188,24 +237,31 @@ class JsonlViewerScreen(Screen):
             self._sync_auto_follow("stream")
             self._sync_auto_follow("output")
 
-            await asyncio.sleep(self._poll_interval)
+            try:
+                await asyncio.sleep(self._poll_interval)
+            except asyncio.CancelledError:
+                break
 
     def on_unmount(self) -> None:
         """Ensure poll loop exits when screen is removed."""
         self._keep_polling = False
 
     def _sync_auto_follow(self, tab_id: str) -> None:
-        """Update _auto_follow based on current scroll position."""
+        """Update _auto_follow based on current scroll position.
+
+        Both stream and output use RichLog (a ScrollView) directly;
+        no VerticalScroll wrapper to query.
+        """
         try:
-            scroll = self.query_one(f"#{tab_id}_scroll", VerticalScroll)
-            self._auto_follow[tab_id] = scroll.is_vertical_scroll_end
+            rl = self.query_one(f"#{tab_id}_log", RichLog)
+            self._auto_follow[tab_id] = rl.is_vertical_scroll_end
         except Exception:
             pass
 
     def _scroll_to_bottom(self, tab_id: str) -> None:
-        """Scroll stream container to bottom."""
+        """Scroll the log widget to its end."""
         try:
-            self.query_one(f"#{tab_id}_scroll", VerticalScroll).scroll_end(animate=False)
+            self.query_one(f"#{tab_id}_log", RichLog).scroll_end(animate=False)
         except Exception:
             pass
 
@@ -234,31 +290,25 @@ class JsonlViewerScreen(Screen):
     def _header_line(self, label: str, path: str) -> str:
         return f"{label}: {os.path.abspath(os.path.expanduser(path))}"
 
-    def _text_with_path(self, label: str, path: str, body: str) -> str:
-        header = self._header_line(label, path)
-        return f"{header}\n\n{body}" if body else header
+    @staticmethod
+    def _format_out_line(line: str) -> Text:
+        """Format a single .out.txt line with an optional timestamp gutter.
 
-    def _append_text_block(self, tab_id: str, text: str) -> None:
-        if not text:
-            return
-        self._sync_auto_follow(tab_id)
-        attr = "_stream_raw" if tab_id == "stream" else "_out_raw"
-        widget_id = "#stream_text" if tab_id == "stream" else "#output_text"
-        current = getattr(self, attr) or ""
-        updated = current + text if current.endswith("\n") or text.startswith("\n") else current + "\n" + text
-        setattr(self, attr, updated)
-        try:
-            self.query_one(widget_id, Static).update(updated)
-        except Exception:
-            return
-
-        new_count = text.count("\n") + (0 if text.endswith("\n") else 1)
-        if self._auto_follow[tab_id]:
-            self._scroll_to_bottom(tab_id)
-            self._pending_new_count[tab_id] = 0
+        Lines starting with ``HH:MM:SS`` get the timestamp rendered dim;
+        lines without a timestamp prefix (e.g. ``RESULT=...``) get an empty
+        8-space gutter for alignment.
+        """
+        m = re.match(r"^(\d{2}:\d{2}:\d{2})\s+(.*)$", line)
+        t = Text()
+        if m:
+            t.append(f"{m.group(1):8}", style="dim")
+            t.append(" │ ", style="dim")
+            t.append(m.group(2))
         else:
-            self._pending_new_count[tab_id] += max(new_count, 1)
-        self._update_info_bar()
+            t.append(f"{'':8}", style="dim")
+            t.append(" │ ", style="dim")
+            t.append(line)
+        return t
 
     def _append_output_from_file(self) -> None:
         if not os.path.isfile(self._o_path):
@@ -267,56 +317,91 @@ class JsonlViewerScreen(Screen):
             size = os.path.getsize(self._o_path)
             if size < self._out_fpos:
                 self._out_fpos = 0
+                self._out_buffer = ""
             with open(self._o_path, "r", encoding="utf-8", errors="replace") as f:
                 f.seek(self._out_fpos)
                 chunk = f.read()
                 self._out_fpos = f.tell()
         except OSError:
             return
-        self._append_text_block("output", chunk)
+
+        # Prepend leftover partial line from the previous read
+        if self._out_buffer:
+            chunk = self._out_buffer + chunk
+            self._out_buffer = ""
+
+        lines = chunk.split("\n")
+        # A chunk that doesn't end with \n means the last line is partial
+        if not chunk.endswith("\n"):
+            self._out_buffer = lines.pop()
+        elif lines and lines[-1] == "":
+            lines.pop()  # trailing empty element from split
+
+        if not lines:
+            return
+
+        self._sync_auto_follow("output")
+
+        try:
+            out_log = self.query_one("#output_log", RichLog)
+            for line in lines:
+                out_log.write(self._format_out_line(line))
+
+            if self._auto_follow["output"]:
+                out_log.scroll_end(animate=False)
+                self._pending_new_count["output"] = 0
+            else:
+                self._pending_new_count["output"] += len(lines)
+        except Exception:
+            return
+
+        self._update_info_bar()
 
     def _append_events(self, events: list[ParsedEvent]) -> None:
         if not events:
             return
 
-        new_lines: list[str] = []
+        rich_lines: list[Text] = []
         for event in events:
+            # result_text / error_text → Markdown tab
             if event.kind in ("result_text", "error_text"):
                 self._result_text = event.text
                 try:
-                    self.query_one("#result_text", Static).update(
-                        self._text_with_path("Result", self._r_path, self._result_text)
+                    self.query_one("#result_header", Static).update(
+                        self._header_line("Result", self._r_path)
                     )
+                    self.query_one("#result_md", Markdown).update(event.text)
                     self.query_one(TabbedContent).active = "result"
                 except Exception:
                     pass
                 continue
 
-            line = format_event_for_viewer(event)
-            if line and line != self._last_stream_line:
-                new_lines.append(line)
-                self._last_stream_line = line
+            line = format_event_as_rich(event)
+            if line is None:
+                continue
+            # Skip line if it's identical to the last one (JSONL dedup)
+            if line.plain == self._last_stream_line:
+                continue
+            self._last_stream_line = line.plain
+            rich_lines.append(line)
 
-        if not new_lines:
+        if not rich_lines:
             return
 
-        # Check if we should auto-follow before updating content
         self._sync_auto_follow("stream")
 
         try:
-            current = self._stream_raw or ""
-            appended = "\n".join(new_lines)
-            self._stream_raw = current + "\n" + appended if current else appended
-            self.query_one("#stream_text", Static).update(self._stream_raw)
+            stream_log = self.query_one("#stream_log", RichLog)
+            for rl in rich_lines:
+                stream_log.write(rl)
+
+            if self._auto_follow["stream"]:
+                stream_log.scroll_end(animate=False)
+                self._pending_new_count["stream"] = 0
+            else:
+                self._pending_new_count["stream"] += len(rich_lines)
         except Exception:
             return
-
-        # Auto-scroll or track pending new content
-        if self._auto_follow["stream"]:
-            self._scroll_to_bottom("stream")
-            self._pending_new_count["stream"] = 0
-        else:
-            self._pending_new_count["stream"] += len(new_lines)
 
         self._update_info_bar()
 
@@ -385,22 +470,34 @@ class JsonlViewerScreen(Screen):
     def action_scroll_active(self, direction: str) -> None:
         try:
             active = self.query_one(TabbedContent).active
-            scroll = self.query_one(f"#{active}_scroll", VerticalScroll)
         except Exception:
             return
 
+        if active in ("stream", "output"):
+            # Log tabs use RichLog (a ScrollView) — no VerticalScroll wrapper
+            try:
+                w = self.query_one(f"#{active}_log", RichLog)
+            except Exception:
+                return
+        else:
+            # Markdown tabs use a VerticalScroll wrapper
+            try:
+                w = self.query_one(f"#{active}_scroll", VerticalScroll)
+            except Exception:
+                return
+
         if direction == "up":
-            scroll.scroll_up(animate=False)
+            w.scroll_up(animate=False)
         elif direction == "down":
-            scroll.scroll_down(animate=False)
+            w.scroll_down(animate=False)
         elif direction == "page_up":
-            scroll.scroll_page_up(animate=False)
+            w.scroll_page_up(animate=False)
         elif direction == "page_down":
-            scroll.scroll_page_down(animate=False)
+            w.scroll_page_down(animate=False)
         elif direction == "home":
-            scroll.scroll_home(animate=False)
+            w.scroll_home(animate=False)
         elif direction == "end":
-            scroll.scroll_end(animate=False)
+            w.scroll_end(animate=False)
 
         if active in self._auto_follow:
             self._sync_auto_follow(active)
@@ -413,7 +510,7 @@ class JsonlViewerScreen(Screen):
 # Tail entry point
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class JsonlTailApp(App):
+class JsonlTailApp(HandoffTuiApp):
     """Standalone Textual app for `handoff tail`."""
 
     TITLE = "handoff tail"
@@ -425,13 +522,14 @@ class JsonlTailApp(App):
         out_path: str,
         result_path: str,
         run_info: dict,
+        theme_name: str | None = None,
     ):
         self._a_jl = jsonl_path
         self._a_pp = prompt_path
         self._a_op = out_path
         self._a_rp = result_path
         self._a_ri = run_info
-        super().__init__()
+        super().__init__(theme_name=theme_name)
 
     def on_mount(self) -> None:
         self.push_screen(JsonlViewerScreen(
@@ -442,12 +540,26 @@ class JsonlTailApp(App):
             run_info=self._a_ri,
             mode="follow",
         ))
+        self.apply_initial_theme()
 
 
-def run_tail(jsonl_path: str, prompt_path: str, result_path: str, run_info: dict) -> None:
+def run_tail(
+    jsonl_path: str,
+    prompt_path: str,
+    result_path: str,
+    run_info: dict,
+    theme_name: str | None = None,
+) -> None:
     """Entry point for `handoff tail`."""
     out_path = run_info.get("out_path", "")
-    JsonlTailApp(jsonl_path, prompt_path, out_path, result_path, run_info).run(mouse=False)
+    JsonlTailApp(
+        jsonl_path,
+        prompt_path,
+        out_path,
+        result_path,
+        run_info,
+        theme_name=theme_name,
+    ).run(mouse=False)
 
 
 def make_viewer_screen(

@@ -146,5 +146,20 @@ system_prompt: |
 | --- | --- |
 | `system_prompt` | 覆盖内置 system_prompt |
 | `include` | 引用其他 YAML 文件 |
+| `tui.theme` | TUI 主题名；默认 `textual-dark`，可选 `textual-light` 及其他 Textual 内置主题 |
+
+## TUI 主题
+
+`handoff list` 和 `handoff tail` 共用同一份 TUI 主题配置：
+
+```yaml
+tui:
+  theme: textual-dark
+```
+
+- 默认值是 `textual-dark`
+- 常见亮色可用 `textual-light`
+- 运行时可在 TUI 底部按 `D` 在默认深色 / 亮色主题之间切换
+- 如果你填了不存在的主题名，程序会自动回退到 `textual-dark`，不会因为主题配置崩溃
 
 机制层（`cli/backend_types.yaml`）定义了 claude/codex 两种 type 的 `command`、`pty`、`session_flags`、`session_id_flags`、`continue_id_flags`、`resume_flags`。这些是程序行为，不可覆盖——想了解完整启动逻辑请直接读那个文件。

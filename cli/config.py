@@ -18,6 +18,7 @@ Backend resolution:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -35,6 +36,50 @@ except ImportError:
 
 _BACKEND_TYPES_PATH = os.path.join(os.path.dirname(__file__), "backend_types.yaml")
 _USER_CONFIG_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "user_config_template.yaml")
+DEFAULT_DARK_THEME = "textual-dark"
+DEFAULT_LIGHT_THEME = "textual-light"
+
+# ── TUI state persistence (theme, independent from config.yaml) ──────────
+
+_TUI_STATE_FILENAME = "tui_state.json"
+
+
+def _tui_state_path() -> str:
+    return os.path.join(user_config_dir(), _TUI_STATE_FILENAME)
+
+
+def read_tui_theme() -> str:
+    """Read the persisted TUI theme name from ``~/.handoff/tui_state.json``.
+
+    Falls back to ``textual-dark`` when the file is missing, corrupt, or
+    the stored theme name is empty / invalid.  Never raises.
+    """
+    path = _tui_state_path()
+    try:
+        if os.path.isfile(path):
+            with open(path, "r") as f:
+                data = json.load(f)
+            theme = data.get("theme", "")
+            if isinstance(theme, str) and theme.strip():
+                return theme.strip()
+    except (OSError, json.JSONDecodeError, ValueError):
+        pass
+    return DEFAULT_DARK_THEME
+
+
+def write_tui_theme(theme: str) -> None:
+    """Persist the TUI theme name to ``~/.handoff/tui_state.json``.
+
+    Best-effort: failures are silently ignored so the app never crashes
+    on a write.
+    """
+    path = _tui_state_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump({"theme": theme}, f)
+    except OSError:
+        pass
 
 # Top-level config keys that belong to the mechanism layer or are otherwise
 # removed.  Warn once and ignore.  system_prompt is deliberately absent from

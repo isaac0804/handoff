@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional, Callable
 
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, InvalidThemeError
 from textual.containers import Container
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Static
@@ -12,10 +12,48 @@ from textual.binding import Binding
 from textual.coordinate import Coordinate
 from textual.message import Message
 
+from .config import DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, read_tui_theme, write_tui_theme
 from .core import format_run_row, task_paths
 
 # Seconds between DB polls for auto-refresh.
 POLL_INTERVAL = 5.0
+
+
+class HandoffTuiApp(App):
+    """Shared Textual app behavior for handoff TUI screens."""
+
+    BINDINGS = [
+        Binding("d", "cycle_theme", "Theme", show=True),
+    ]
+
+    def __init__(self, *args, theme_name: str | None = None, **kwargs):
+        self._initial_theme_name = theme_name or read_tui_theme()
+        super().__init__(*args, **kwargs)
+
+    def apply_initial_theme(self) -> None:
+        self._set_theme(self._initial_theme_name, quiet=False)
+
+    def _set_theme(self, theme_name: str, *, quiet: bool) -> str:
+        try:
+            self.theme = theme_name
+            return theme_name
+        except InvalidThemeError:
+            self.theme = DEFAULT_DARK_THEME
+            if not quiet:
+                self.notify(
+                    f"Unknown theme: {theme_name}. Using {DEFAULT_DARK_THEME}.",
+                    severity="warning",
+                    timeout=3,
+                )
+            return DEFAULT_DARK_THEME
+
+    def action_cycle_theme(self) -> None:
+        next_theme = (
+            DEFAULT_LIGHT_THEME if self.current_theme.dark else DEFAULT_DARK_THEME
+        )
+        applied_theme = self._set_theme(next_theme, quiet=False)
+        write_tui_theme(applied_theme)
+        self.notify(f"Theme saved: {applied_theme}", severity="information", timeout=2)
 
 
 class RunListScreen(Screen):
@@ -30,8 +68,8 @@ class RunListScreen(Screen):
 
     BINDINGS = [
         Binding("right,space", "select_run", "Detail", show=True),
-        Binding("o", "go_resume", "Open in Claude", show=True),
-        Binding("c", "copy_session", "Copy Session", show=True),
+        Binding("o", "go_resume", "Open", show=True),
+        Binding("c", "copy_session", "Copy", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -273,7 +311,7 @@ class RunListScreen(Screen):
             self._rebuild_table()
 
 
-class RunListApp(App):
+class RunListApp(HandoffTuiApp):
     """Textual app wrapping the run list screen.
 
     Usage:
@@ -296,12 +334,18 @@ class RunListApp(App):
     }
     """
 
-    def __init__(self, rows: list, full_cwd: bool = False, refresh_fn: Callable[[], list] | None = None):
+    def __init__(
+        self,
+        rows: list,
+        full_cwd: bool = False,
+        refresh_fn: Callable[[], list] | None = None,
+        theme_name: str | None = None,
+    ):
         self._rows = rows
         self._full_cwd = full_cwd
         self._refresh_fn = refresh_fn
         self._action_result: Optional[str] = None
-        super().__init__()
+        super().__init__(theme_name=theme_name)
 
     @property
     def action_result(self) -> Optional[str]:
@@ -310,6 +354,7 @@ class RunListApp(App):
     def on_mount(self) -> None:
         screen = RunListScreen(self._rows, self._full_cwd, refresh_fn=self._refresh_fn)
         self.push_screen(screen)
+        self.apply_initial_theme()
 
     def on_screen_dismiss(self, event: Screen.Dismissed) -> None:
         """Capture action result when a screen is dismissed."""
