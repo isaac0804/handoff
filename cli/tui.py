@@ -172,6 +172,7 @@ class RunListScreen(Screen):
             "cwd": row["cwd"],
             "uuid": row["uuid"],
             "out_path": out_path,
+            "backend": row["backend"],
         }
 
         from .jsonl_viewer import make_viewer_screen

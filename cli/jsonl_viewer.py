@@ -109,9 +109,15 @@ class JsonlViewerScreen(Screen):
         self._result_text: Optional[str] = None
         self._last_stream_line = ""
         self._poll_interval = 0.5
+        # Codex backends don't produce JSONL — hide the stream tab.
+        self._has_jsonl = run_info.get("backend", "") != "codex"
         # Auto-follow state
-        self._auto_follow = {"stream": True, "output": True}
-        self._pending_new_count = {"stream": 0, "output": 0}
+        self._auto_follow = {"output": True}
+        if self._has_jsonl:
+            self._auto_follow["stream"] = True
+        self._pending_new_count = {"output": 0}
+        if self._has_jsonl:
+            self._pending_new_count["stream"] = 0
         self._keep_polling = True
         super().__init__(name=name, id=id, classes=classes)
 
@@ -123,9 +129,11 @@ class JsonlViewerScreen(Screen):
             f"cwd: {ri.get('cwd', '?')}",
             id="info_bar",
         )
-        with TabbedContent(initial="stream"):
-            with TabPane("1 Stream JSONL", id="stream"):
-                yield RichLog(id="stream_log", auto_scroll=False, highlight=False, markup=False)
+        initial = "stream" if self._has_jsonl else "output"
+        with TabbedContent(initial=initial):
+            if self._has_jsonl:
+                with TabPane("1 Stream JSONL", id="stream"):
+                    yield RichLog(id="stream_log", auto_scroll=False, highlight=False, markup=False)
             with TabPane("2 Output .out", id="output"):
                 yield RichLog(id="output_log", auto_scroll=False, highlight=False, markup=False)
             with TabPane("3 Prompt", id="prompt"):
@@ -185,14 +193,15 @@ class JsonlViewerScreen(Screen):
             )
 
         # ── Stream tab ──────────────────────────────────────────────────────
-        stream_log = self.query_one("#stream_log", RichLog)
-        stream_log.write(Text(self._header_line("JSONL", self._jl_path), style="dim"))
-        if os.path.isfile(self._jl_path):
-            with open(self._jl_path, "r", encoding="utf-8", errors="replace") as f:
-                f.seek(self._fpos)
-                events, self._last_ts = read_events(f, self._last_ts)
-                self._fpos = f.tell()
-            self._append_events(events)
+        if self._has_jsonl:
+            stream_log = self.query_one("#stream_log", RichLog)
+            stream_log.write(Text(self._header_line("JSONL", self._jl_path), style="dim"))
+            if os.path.isfile(self._jl_path):
+                with open(self._jl_path, "r", encoding="utf-8", errors="replace") as f:
+                    f.seek(self._fpos)
+                    events, self._last_ts = read_events(f, self._last_ts)
+                    self._fpos = f.tell()
+                self._append_events(events)
 
         # ── Output tab ──────────────────────────────────────────────────────
         out_log = self.query_one("#output_log", RichLog)
@@ -200,7 +209,8 @@ class JsonlViewerScreen(Screen):
         self._append_output_from_file()
 
         # Scroll to bottom after initial load
-        stream_log.scroll_end(animate=False)
+        if self._has_jsonl:
+            stream_log.scroll_end(animate=False)
         out_log.scroll_end(animate=False)
 
         # Start poll worker for all modes (live updates for running runs)
@@ -211,7 +221,7 @@ class JsonlViewerScreen(Screen):
     @work(exclusive=True, thread=False)
     async def _poll_jsonl(self) -> None:
         while self._keep_polling:
-            if os.path.isfile(self._jl_path):
+            if self._has_jsonl and os.path.isfile(self._jl_path):
                 try:
                     with open(self._jl_path, "r", encoding="utf-8", errors="replace") as f:
                         f.seek(self._fpos)
@@ -226,7 +236,8 @@ class JsonlViewerScreen(Screen):
             self._append_output_from_file()
 
             # Check scroll position to update auto-follow state
-            self._sync_auto_follow("stream")
+            if self._has_jsonl:
+                self._sync_auto_follow("stream")
             self._sync_auto_follow("output")
 
             try:
@@ -267,7 +278,10 @@ class JsonlViewerScreen(Screen):
                 f"cwd: {ri.get('cwd', '?')}",
             ]
             status_parts = []
-            for tab_id, label in (("stream", "stream"), ("output", "output")):
+            tabs = [("output", "output")]
+            if self._has_jsonl:
+                tabs.insert(0, ("stream", "stream"))
+            for tab_id, label in tabs:
                 if self._auto_follow[tab_id]:
                     status_parts.append(f"{label}: follow")
                 elif self._pending_new_count[tab_id]:
