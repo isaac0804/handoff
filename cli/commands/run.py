@@ -21,6 +21,7 @@ from ..backend import (
     wrap_with_pty,
 )
 from ..stream import execute_run
+from ..runtime_info import update_runtime_info
 from ..config import Config
 
 
@@ -260,6 +261,8 @@ def _execute(
         sys.exit(2)
     backend_cfg["_resolved_model"] = model
     backend_cfg["_system_prompt"] = config.system_prompt
+    update_runtime_info(conn, uid, model=model, pro=pro)
+    conn.commit()
 
     btype = backend_type(backend_cfg)
     set_backend_env(backend_cfg, model, backend_cfg.get("pro_model", ""))

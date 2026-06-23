@@ -55,6 +55,8 @@ The `opus` and `codex` backends reuse your existing Claude Code / Codex logins �
 
 For DeepSeek, we recommend the [OpenCode Go plan](https://opencode.ai/go?ref=D5926WCTD8) (lowest cost, includes DeepSeek V4). Once you have a key, edit `~/.handoff/config.yaml` and change just the `ANTHROPIC_AUTH_TOKEN` line:
 
+> ⚠️ **OpenCode Go users**: you need a local proxy to use OpenCode Go with Claude Code. See **[routatic/proxy](https://github.com/routatic/proxy)**.
+
 ```yaml
 # ~/.handoff/config.yaml — handoff init generates this for you
 backends:
@@ -65,7 +67,7 @@ backends:
     env:
       ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
       #for opencode-go you have to setup local proxy  
-      #see: https://github.com/iTzFaisal/oc-cc-proxy
+      #see: https://github.com/routatic/proxy
       ANTHROPIC_AUTH_TOKEN: "sk-..."  
       ANTHROPIC_MODEL: "{model}"
 
@@ -113,7 +115,7 @@ Dispatching and resuming are the AI's job (`handoff run` / `handoff resume` unde
 <tr>
 <td width="50%" valign="top">
 
-**`handoff list` / `handoff ls`** — interactive TUI over your full task history. See the full prompt, live status, and final result; press `G` on a row to reload that conversation and keep chatting.
+**`handoff list` / `handoff ls`** — interactive TUI over your full task history. See the full prompt, live status, and final result; press `O` on a row to reload that conversation and keep chatting.
 
 </td>
 <td width="50%" valign="top">

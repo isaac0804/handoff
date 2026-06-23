@@ -9,10 +9,20 @@ from __future__ import annotations
 import os
 import sys
 import sqlite3
+import subprocess
+import threading
 import uuid as _uuid
 import datetime
 import re
 from typing import Optional
+
+from .runtime_info import (
+    dump_runtime_info,
+    format_usage,
+    normalize_usage,
+    parse_runtime_info,
+    scan_jsonl_usage,
+)
 
 STATE_DIR = os.path.expanduser("~/.handoff")
 _LEGACY_DIR = os.path.expanduser("~/.ds-cli")  # pre-rename state dir, used only for migration
@@ -21,6 +31,7 @@ DB_PATH = os.path.join(DB_DIR, "handoff.db")
 _LEGACY_DB = os.path.join(DB_DIR, "dscli.db")  # pre-rename DB name, used only for migration
 TASKS_DIR = os.path.join(STATE_DIR, "tasks")
 _MAX_DAILY = 1035  # ZZ is max seq_code
+_RUNTIME_BACKFILL_STARTED = False
 
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -157,6 +168,7 @@ def get_db():
     _migrate_legacy_state()
     os.makedirs(DB_DIR, exist_ok=True)
     os.makedirs(TASKS_DIR, exist_ok=True)
+    runtime_backfill_needed = False
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("""
@@ -173,7 +185,8 @@ def get_db():
             jsonl_path  TEXT NOT NULL,
             created_at  TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
             status      TEXT DEFAULT 'running',
-            backend     TEXT DEFAULT ''
+            backend     TEXT DEFAULT '',
+            runtime_info TEXT DEFAULT '{}'
         )
     """)
     conn.execute("""
@@ -197,6 +210,10 @@ def get_db():
                 "UPDATE runs SET session_id = uuid WHERE session_id IS NULL OR session_id = ''"
             )
             cols.add("session_id")
+        if "runtime_info" not in cols:
+            conn.execute("ALTER TABLE runs ADD COLUMN runtime_info TEXT DEFAULT '{}'")
+            cols.add("runtime_info")
+            runtime_backfill_needed = True
         missing = {"run_id", "seq_code", "run_day", "backend"} - cols
         if missing:
             print(
@@ -209,8 +226,53 @@ def get_db():
         pass
 
     conn.commit()
+    if runtime_backfill_needed:
+        _backfill_runtime_usage_async()
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _backfill_runtime_usage_async() -> None:
+    """Start one best-effort background backfill after runtime_info is added."""
+    global _RUNTIME_BACKFILL_STARTED
+    if _RUNTIME_BACKFILL_STARTED:
+        return
+    _RUNTIME_BACKFILL_STARTED = True
+    try:
+        subprocess.Popen(
+            [sys.executable, "-c", "from cli.core import _backfill_runtime_usage; _backfill_runtime_usage()"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        thread = threading.Thread(target=_backfill_runtime_usage, name="handoff-runtime-backfill", daemon=True)
+        thread.start()
+
+
+def _backfill_runtime_usage() -> None:
+    """Populate runtime_info.usage for historical non-running rows without blocking startup."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT uuid, jsonl_path, backend, runtime_info FROM runs WHERE status != 'running'"
+        ).fetchall()
+        for idx, row in enumerate(rows, start=1):
+            info = parse_runtime_info(row["runtime_info"])
+            if isinstance(info.get("usage"), dict):
+                continue
+            usage = scan_jsonl_usage(row["jsonl_path"], row["backend"] or "")
+            info["usage"] = normalize_usage(usage)
+            conn.execute(
+                "UPDATE runs SET runtime_info = ? WHERE uuid = ?",
+                (dump_runtime_info(info), row["uuid"]),
+            )
+            if idx % 25 == 0:
+                conn.commit()
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def create_run(
@@ -324,14 +386,19 @@ def format_run_row(row, full_cwd: bool = False) -> dict[str, str]:
 
     cwd = row["cwd"]
     cwd_disp = short_path(cwd) if full_cwd else (os.path.basename(cwd) or cwd)
+    info = parse_runtime_info(row_value(row, "runtime_info", ""))
+    prompt_marker = "[Pro] " if info.get("pro") else ""
+    prompt_width = 80
+    prompt = prompt_marker + prompt_prefix(row["prompt"], max(1, prompt_width - len(prompt_marker)))
     return {
         "id": row["run_id"],
         "date": date_str,
-        "prompt": prompt_prefix(row["prompt"], 40),
+        "prompt": prompt,
         "cwd": cwd_disp,
         "uuid": row["uuid"],
         "status": row["status"],
         "backend": row_value(row, "backend", "") or "",
+        "tokens": format_usage(row_value(row, "runtime_info", "")),
     }
 
 

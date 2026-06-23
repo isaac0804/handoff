@@ -2,19 +2,174 @@
 
 from __future__ import annotations
 
+import os
+import sqlite3
 from typing import Optional, Callable
 
 from textual.app import App, ComposeResult, InvalidThemeError
-from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Static
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen, Screen
+from textual.widgets import Button, DataTable, Static
 from textual.binding import Binding
 from textual.coordinate import Coordinate
 
 from .config import DEFAULT_DARK_THEME, DEFAULT_LIGHT_THEME, read_tui_theme, write_tui_theme
-from .core import format_run_row, task_paths
+from .core import format_run_row, get_db, prompt_prefix, row_value, task_paths
+from .runtime_info import (
+    dump_runtime_info,
+    format_usage_detail_value,
+    format_usage_value,
+    kill_process_group,
+    parse_runtime_info,
+    runtime_pid,
+    scan_jsonl_usage,
+)
 
 # Seconds between DB polls for auto-refresh.
 POLL_INTERVAL = 5.0
+
+
+class KillRunError(Exception):
+    """Raised when a running task cannot be killed from the TUI."""
+
+
+class KillConfirmScreen(ModalScreen[bool]):
+    """Confirm killing a running task."""
+
+    CSS = """
+    KillConfirmScreen {
+        align: center middle;
+    }
+
+    #kill_dialog {
+        width: 60;
+        height: auto;
+        border: thick $error;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    #kill_title {
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    #kill_message {
+        margin-bottom: 1;
+    }
+
+    #kill_buttons {
+        height: auto;
+        align-horizontal: right;
+    }
+
+    #kill_buttons Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("enter", "confirm", "Kill", show=False),
+        Binding("escape", "cancel", "Cancel", show=False),
+    ]
+
+    def __init__(self, run_id: str):
+        self._run_id = run_id
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Static("Kill running task?", id="kill_title"),
+            Static(
+                f"Send SIGTERM to the process group for {self._run_id}.",
+                id="kill_message",
+            ),
+            Horizontal(
+                Button("Cancel", id="cancel", variant="default"),
+                Button("Kill", id="kill", variant="error"),
+                id="kill_buttons",
+            ),
+            id="kill_dialog",
+        )
+
+    def on_mount(self) -> None:
+        self.query_one("#kill", Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss(event.button.id == "kill")
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+def _runtime_info_column_exists(conn: sqlite3.Connection) -> bool:
+    return any(row[1] == "runtime_info" for row in conn.execute("PRAGMA table_info(runs)"))
+
+
+def _load_runtime_info(run_id: str) -> dict:
+    """Load runtime_info JSON for a run without requiring list rows to include it."""
+    conn = get_db()
+    try:
+        if not _runtime_info_column_exists(conn):
+            raise KillRunError("runtime_info column is not available yet")
+
+        row = conn.execute(
+            "SELECT runtime_info FROM runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            raise KillRunError("run no longer exists")
+
+        info = parse_runtime_info(row["runtime_info"] if row else None)
+        if not isinstance(info, dict):
+            raise KillRunError("runtime_info is not a JSON object")
+        return info
+    finally:
+        conn.close()
+
+
+def _runtime_pid(info: dict) -> int:
+    pid = runtime_pid(dump_runtime_info(info))
+    if pid <= 0:
+        raise KillRunError("running task has no runtime pid")
+    return pid
+
+
+def _kill_process_group(pid: int) -> None:
+    try:
+        kill_process_group(pid)
+    except ProcessLookupError as exc:
+        raise KillRunError(f"process {pid} is not running") from exc
+    except PermissionError as exc:
+        raise KillRunError(f"permission denied killing process group for {pid}") from exc
+    except OSError as exc:
+        raise KillRunError(f"failed to kill process group for {pid}: {exc}") from exc
+
+
+def _mark_run_interrupted(run_id: str, info: dict) -> None:
+    info = dict(info)
+    info.pop("pid", None)
+    conn = get_db()
+    try:
+        if not _runtime_info_column_exists(conn):
+            raise KillRunError("runtime_info column is not available yet")
+
+        cursor = conn.execute(
+            "UPDATE runs SET status = ?, runtime_info = ? "
+            "WHERE run_id = ? AND status = ?",
+            ("interrupted", dump_runtime_info(info), run_id, "running"),
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            raise KillRunError("run is no longer running")
+    except sqlite3.Error as exc:
+        raise KillRunError(f"failed to update run status: {exc}") from exc
+    finally:
+        conn.close()
 
 
 class HandoffTuiApp(App):
@@ -61,6 +216,7 @@ class RunListScreen(Screen):
       Enter / →   — open detail view for the selected run
       O           — resume the selected run's session
       C           — copy session UUID to clipboard
+      X           — kill the selected running task
       Q           — quit
     """
 
@@ -68,6 +224,7 @@ class RunListScreen(Screen):
         Binding("right,space", "select_run", "Detail", show=True),
         Binding("o", "go_resume", "Open", show=True),
         Binding("c", "copy_session", "Copy", show=True),
+        Binding("x", "kill_run", "Kill", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -102,26 +259,19 @@ class RunListScreen(Screen):
         run_label = "run" if count == 1 else "runs"
         yield Static(f" handoff runs  ·  {count} recent {run_label}", id="title_bar")
         yield DataTable(id="run_table", cursor_type="row")
-        yield Footer()
+        yield Static("", id="run_footer")
 
     def on_mount(self) -> None:
         table = self.query_one("#run_table", DataTable)
-        table.add_columns("RUN", "DATE", "PROMPT", "CWD", "STATUS")
+        self._add_columns(table)
 
         if not self._rows:
-            table.add_row("(no runs)", "", "", "", "")
+            table.add_row("(no runs)", "", "", "", "", "")
+            self._update_footer()
             return
 
         for row in self._rows:
-            fmt = format_run_row(row, self._full_cwd)
-            table.add_row(
-                fmt["id"],
-                fmt["date"],
-                fmt["prompt"][:40],
-                fmt["cwd"],
-                fmt.get("status", ""),
-                key=fmt["id"],
-            )
+            self._add_table_row(table, row)
 
         table.focus()
 
@@ -136,6 +286,7 @@ class RunListScreen(Screen):
 
         if self._open_detail_on_mount:
             self._open_detail()
+        self._update_footer()
 
     def _selected_row(self):
         """Return the sqlite3.Row for the currently selected table row."""
@@ -151,6 +302,11 @@ class RunListScreen(Screen):
         """Handle Enter key on a DataTable row."""
         event.stop()
         self._open_detail()
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Refresh footer token details as the cursor moves."""
+        event.stop()
+        self._update_footer()
 
     def action_select_run(self) -> None:
         """Open detail view for the selected run."""
@@ -204,6 +360,40 @@ class RunListScreen(Screen):
             except (subprocess.CalledProcessError, FileNotFoundError):
                 self.notify("Copy failed: pbcopy not available", severity="error")
 
+    def action_kill_run(self) -> None:
+        """Confirm and kill the selected running task."""
+        row = self._selected_row()
+        if row is None:
+            return
+
+        run_id = row["run_id"]
+        if row["status"] != "running":
+            self.notify("Only running tasks can be killed", severity="warning", timeout=3)
+            return
+
+        self.app.push_screen(KillConfirmScreen(run_id), self._kill_run_after_confirm)
+
+    def _kill_run_after_confirm(self, confirmed: bool) -> None:
+        if not confirmed:
+            return
+
+        row = self._selected_row()
+        if row is None:
+            return
+        run_id = row["run_id"]
+
+        try:
+            info = _load_runtime_info(run_id)
+            pid = _runtime_pid(info)
+            _kill_process_group(pid)
+            _mark_run_interrupted(run_id, info)
+        except KillRunError as exc:
+            self.notify(f"Kill failed: {exc}", severity="error", timeout=5)
+            return
+
+        self.notify(f"Killed: {run_id}", severity="information", timeout=3)
+        self._refresh_now()
+
     def action_quit(self) -> None:
         self.app.exit()
 
@@ -212,7 +402,94 @@ class RunListScreen(Screen):
     @staticmethod
     def _compute_fingerprint(rows: list) -> str:
         """Lightweight change-detection fingerprint: run_id:status per row."""
-        return "|".join(f"{r['run_id']}:{r['status']}" for r in rows)
+        parts = []
+        for row in rows:
+            jsonl_fp = ""
+            if row["status"] == "running":
+                try:
+                    st = os.stat(row["jsonl_path"])
+                    jsonl_fp = f":{st.st_size}:{st.st_mtime_ns}"
+                except OSError:
+                    jsonl_fp = ""
+            parts.append(
+                f"{row['run_id']}:{row['status']}:{row_value(row, 'runtime_info', '')}{jsonl_fp}"
+            )
+        return "|".join(parts)
+
+    def _terminal_width(self) -> int:
+        try:
+            width = int(self.app.size.width)
+            if width > 0:
+                return width
+        except Exception:
+            pass
+        try:
+            return os.get_terminal_size().columns
+        except OSError:
+            return 120
+
+    def _prompt_width(self) -> int:
+        cwd_width = 28 if self._full_cwd else 18
+        fixed = 34 + 11 + 11 + cwd_width + 18
+        return max(40, self._terminal_width() - fixed)
+
+    def _add_columns(self, table: DataTable) -> None:
+        cwd_width = 28 if self._full_cwd else 18
+        table.add_column("RUN", width=34, key="run")
+        table.add_column("DATE", width=11, key="date")
+        table.add_column("STATUS", width=11, key="status")
+        table.add_column("CWD", width=cwd_width, key="cwd")
+        table.add_column("PROMPT", width=self._prompt_width(), key="prompt")
+
+    def _add_table_row(self, table: DataTable, row) -> None:
+        fmt = format_run_row(row, self._full_cwd)
+        table.add_row(
+            fmt["id"],
+            fmt["date"],
+            fmt.get("status", ""),
+            fmt["cwd"],
+            self._prompt_for_row(row),
+            key=fmt["id"],
+        )
+
+    @staticmethod
+    def _row_is_pro(row) -> bool:
+        info = parse_runtime_info(row_value(row, "runtime_info", ""))
+        return bool(info.get("pro"))
+
+    def _prompt_for_row(self, row) -> str:
+        width = self._prompt_width()
+        prefix = "[Pro] " if self._row_is_pro(row) else ""
+        body_width = max(1, width - len(prefix))
+        return prefix + prompt_prefix(row["prompt"], body_width)
+
+    def _usage_for_row(self, row) -> dict:
+        if row["status"] == "running":
+            usage = scan_jsonl_usage(row["jsonl_path"], row_value(row, "backend", "") or "")
+            if format_usage_value(usage) != "-":
+                return usage
+        info = parse_runtime_info(row_value(row, "runtime_info", ""))
+        usage = info.get("usage")
+        return usage if isinstance(usage, dict) else {}
+
+    def _token_detail_for_row(self, row) -> str:
+        return format_usage_detail_value(self._usage_for_row(row))
+
+    def _update_footer(self) -> None:
+        try:
+            footer = self.query_one("#run_footer", Static)
+        except Exception:
+            return
+        row = self._selected_row()
+        detail = self._token_detail_for_row(row) if row is not None else ""
+        left = " →/Space Detail   O Open   C Copy   X Kill   Q Quit"
+        right = f"{detail}   ^P Palette" if detail else "^P Palette"
+        width = self._terminal_width()
+        if len(left) + len(right) + 1 > width:
+            max_left = max(0, width - len(right) - 4)
+            left = left[:max_left].rstrip()
+        gap = max(1, width - len(left) - len(right))
+        footer.update(left + (" " * gap) + right)
 
     def _save_cursor_run_id(self) -> None:
         """Remember the currently selected run_id before a table rebuild."""
@@ -258,18 +535,11 @@ class RunListScreen(Screen):
         if not self._rows:
             table.add_row("(no runs)", "", "", "", "")
             self.query_one("#title_bar", Static).update(" handoff runs  ·  0 runs")
+            self._update_footer()
             return
 
         for row in self._rows:
-            fmt = format_run_row(row, self._full_cwd)
-            table.add_row(
-                fmt["id"],
-                fmt["date"],
-                fmt["prompt"][:40],
-                fmt["cwd"],
-                fmt.get("status", ""),
-                key=fmt["id"],
-            )
+            self._add_table_row(table, row)
 
         # Refresh title-bar count
         count = len(self._rows)
@@ -282,6 +552,7 @@ class RunListScreen(Screen):
 
         if had_focus:
             table.focus()
+        self._update_footer()
 
     def _poll_refresh(self) -> None:
         """Periodic timer callback: check for new/changed runs from the DB."""
@@ -320,6 +591,25 @@ class RunListScreen(Screen):
             self._dirty = False
             self._rebuild_table()
 
+    def _refresh_now(self) -> None:
+        """Refresh immediately after an action mutates the selected run."""
+        if self._refresh_fn is None:
+            return
+        try:
+            fresh_rows = self._refresh_fn()
+        except Exception:
+            return
+        if fresh_rows is None:
+            return
+
+        self._save_cursor_run_id()
+        self._rows = fresh_rows
+        self._fingerprint = self._compute_fingerprint(fresh_rows)
+        if self.app.screen is self:
+            self._rebuild_table()
+        else:
+            self._dirty = True
+
 
 class RunListApp(HandoffTuiApp):
     """Textual app wrapping the run list screen.
@@ -340,6 +630,16 @@ class RunListApp(HandoffTuiApp):
         background: $accent;
         color: $text;
         text-style: bold;
+        padding: 0 1;
+    }
+    #run_table {
+        height: 1fr;
+    }
+    #run_footer {
+        dock: bottom;
+        height: 1;
+        background: $panel;
+        color: $text;
         padding: 0 1;
     }
     """
