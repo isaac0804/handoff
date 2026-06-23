@@ -16,13 +16,6 @@ import os
 import sys
 
 from ..core import get_db, find_run, row_value
-from ..backend import (
-    build_resume_args,
-    format_shell_command,
-    resolved_backend_env,
-    resolve_backend_model,
-    set_backend_env,
-)
 from ..config import Config
 
 
@@ -163,7 +156,8 @@ def cmd_resume(argv: list[str], config: Config):
     if prompt_text is None:
         # Interactive: reopen the conversation in claude (replaces this process).
         conn.close()
-        _resume_interactive(config, backend_name, session_id, cwd, pro, verbose=verbose)
+        from .open import _open_interactive
+        _open_interactive(config, backend_name, session_id, cwd, pro, verbose=verbose)
     else:
         # Non-interactive: dispatch a new turn through the run pipeline.
         conn.close()
@@ -178,31 +172,3 @@ def cmd_resume(argv: list[str], config: Config):
             slug=slug_arg or "resume",
             verbose=verbose,
         )
-
-
-def _resume_interactive(config: Config, backend_name: str, session_id: str, cwd: str, pro: bool, verbose: bool = False):
-    backend_cfg = config.get_backend(backend_name)
-    if not backend_cfg:
-        print(
-            f"handoff: unknown backend '{backend_name}'. "
-            f"Available: {', '.join(sorted(config.backends.keys()))}",
-            file=sys.stderr,
-        )
-        sys.exit(2)
-
-    model = resolve_backend_model(backend_cfg, pro)
-    backend_cfg["_resolved_model"] = model
-    backend_cfg["_system_prompt"] = config.system_prompt
-
-    set_backend_env(backend_cfg, model, backend_cfg.get("pro_model", ""))
-
-    args = build_resume_args(
-        backend_cfg, session_id,
-        pro_model=backend_cfg.get("pro_model", ""),
-    )
-
-    if verbose:
-        unset_keys, set_env = resolved_backend_env(backend_cfg, model, backend_cfg.get("pro_model", ""))
-        print(f"CMD: {format_shell_command(cwd, args, unset_keys, set_env)}", file=sys.stderr, flush=True)
-    os.chdir(cwd)
-    os.execvp(args[0], args)

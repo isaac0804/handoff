@@ -14,6 +14,7 @@ def usage(config=None):
   handoff init      [-y|--yes]
   handoff new       --backend <name> [--slug <slug>] [--write]
   handoff list|ls   [<run-id|seq>] [--uuid] [--cwd] [--follow]
+  handoff open      [<run-id|seq>] [--pro] [--cwd <dir>] [--verbose]
   handoff run       [--backend <name>] [--cwd <dir>] [--slug <slug>] [--pro] [--verbose] (<input-file|-> | --text <prompt...>)
   handoff resume    [<run-id|seq>] [--slug <slug>] [--pro] [--cwd <dir>] [--verbose] [(<input-file|-> | --text <prompt...>)]
   handoff tail [<run-id|seq>]
@@ -23,6 +24,7 @@ def usage(config=None):
   handoff list             — browse your past sessions (`ls` alias supported)
   handoff list <seq> --follow
                           — jump straight into one run's live detail view
+  handoff open <seq>      — reopen a past conversation (interactive)
   handoff run --text hi    — quick smoke-test / debug your config.yaml
   handoff resume <seq>     — reopen a past conversation (interactive)
   handoff resume <seq> -   — dispatch a follow-up task to that conversation (heredoc/--text)
@@ -81,11 +83,11 @@ def main():
         cmd_env(rest)
         return
 
-    known = {"run", "list", "ls", "resume", "tail", "new"}
+    known = {"run", "list", "ls", "open", "resume", "tail", "new"}
     if subcmd not in known:
         print(
             f"handoff: unknown subcommand '{subcmd}' — expected: "
-            f"env, init, list, ls, new, run, resume, tail",
+            f"env, init, list, ls, new, open, run, resume, tail",
             file=sys.stderr,
         )
         usage()
@@ -94,6 +96,7 @@ def main():
     from .config import Config
     from .commands.run import cmd_run
     from .commands.list import cmd_list
+    from .commands.open import cmd_open
     from .commands.resume import cmd_resume
     from .commands.tail import cmd_tail
     from .commands.new import cmd_new
@@ -106,6 +109,8 @@ def main():
         cmd_new(rest, config)
     elif subcmd in ("list", "ls"):
         cmd_list(rest, config)
+    elif subcmd == "open":
+        cmd_open(rest, config)
     elif subcmd == "resume":
         cmd_resume(rest, config)
     elif subcmd == "tail":

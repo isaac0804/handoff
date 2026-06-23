@@ -1,6 +1,6 @@
 [project]
 name = "handoff-cli"
-version = "0.3.8"
+version = "0.3.9"
 description = "Multi coding-agent task dispatcher — a CLI proxy for claude that sends coding tasks to configurable AI backends"
 readme = "README.md"
 requires-python = ">=3.9"

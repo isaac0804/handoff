@@ -37,7 +37,7 @@ def cmd_list(argv: list[str], config: Config):
 
     def _recent_rows():
         return conn.execute(
-            "SELECT seq, run_id, uuid, cwd, prompt, created_at, jsonl_path, status, backend "
+            "SELECT seq, run_id, uuid, cwd, prompt, created_at, jsonl_path, status, backend, runtime_info "
             "FROM runs ORDER BY created_at DESC LIMIT 50"
         ).fetchall()
 
@@ -91,9 +91,9 @@ def cmd_list(argv: list[str], config: Config):
 
         if app.action_result and app.action_result.startswith("resume:"):
             run_id = app.action_result[len("resume:"):]
-            from .resume import cmd_resume
+            from .open import cmd_open
 
-            cmd_resume([run_id], config)
+            cmd_open([run_id], config)
         return
 
     conn.close()
@@ -104,7 +104,7 @@ def cmd_list(argv: list[str], config: Config):
 
     rows_to_print = [selected_row] if selected_row else rows
 
-    header = ["RUN", "DATE", "PROMPT", "CWD"]
+    header = ["RUN", "DATE", "STATUS", "TOKENS", "CWD", "PROMPT"]
     if show_uuid:
         header.append("UUID")
 
@@ -112,10 +112,12 @@ def cmd_list(argv: list[str], config: Config):
     for r in rows_to_print:
         fmt = format_run_row(r, full_cwd)
         cols = [
-            fmt["id"].ljust(13),
+            fmt["id"].ljust(34),
             fmt["date"].ljust(11),
-            fmt["prompt"].ljust(30),
-            fmt["cwd"],
+            fmt["status"].ljust(11),
+            fmt["tokens"].rjust(24),
+            fmt["cwd"].ljust(24),
+            fmt["prompt"],
         ]
         if show_uuid:
             cols.append(fmt["uuid"])

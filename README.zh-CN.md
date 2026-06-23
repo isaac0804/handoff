@@ -56,6 +56,8 @@ opus / codex 走你本机的 claude / codex 登录态，零配置；**只有 Dee
 
 DeepSeek 算力推荐走 [OpenCode Go 套餐](https://opencode.ai/go?ref=D5926WCTD8)（单价最低，含 DeepSeek V4）。拿到 key 后，编辑 `~/.handoff/config.yaml`，只改 `ANTHROPIC_AUTH_TOKEN` 这一行：
 
+> ⚠️ **OpenCode Go 用户**：需要先搭一个本地代理才能配合 Claude Code 使用。详见 **[routatic/proxy](https://github.com/routatic/proxy)**。
+
 ```yaml
 # ~/.handoff/config.yaml —— handoff init 帮你生成
 backends:
@@ -65,7 +67,7 @@ backends:
     pro_model: "deepseek-v4-pro[1m]"
     env:
       ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
-      ANTHROPIC_AUTH_TOKEN: "sk-..."  # ← 改这里。本地代理设置见 https://github.com/iTzFaisal/oc-cc-proxy
+      ANTHROPIC_AUTH_TOKEN: "sk-..."  # ← 改这里。本地代理设置见 https://github.com/routatic/proxy
       ANTHROPIC_MODEL: "{model}"
 
   opus:                              # 本机 claude 登录态，零配置
@@ -112,7 +114,7 @@ backends:
 <tr>
 <td width="50%" valign="top">
 
-**`handoff list` / `handoff ls`** — 交互式 TUI，浏览全部历史任务。看 prompt 全文、实时状态、最终结果；选中按 `G` 直接把那次会话重新加载进来接着聊。
+**`handoff list` / `handoff ls`** — 交互式 TUI，浏览全部历史任务。看 prompt 全文、实时状态、最终结果；选中按 `O` 直接把那次会话重新加载进来接着聊。
 
 </td>
 <td width="50%" valign="top">

@@ -2,11 +2,11 @@
 
 [← 返回 README](../README.zh-CN.md)
 
-六个命令按使用者分两组：
+七个命令按使用者分两组：
 
 | 使用者 | 命令 | 用途 |
 | --- | --- | --- |
-| **你** | `list`/`ls` / `tail` / `env` / `init` | 看任务列表、盯进度、查路径、初始化 |
+| **你** | `list`/`ls` / `open` / `tail` / `env` / `init` | 看任务列表、重开会话、盯进度、查路径、初始化 |
 | **AI**（skill / subagent） | `run` / `resume` | 派发新任务、续接已有会话 |
 
 ## 给你用的命令
@@ -24,15 +24,25 @@ handoff ls [--uuid] [--cwd]
 | --- | --- |
 | 表格视图 | seq / run_id / 时间 / 状态 / backend / 摘要 / cwd |
 | `Enter` | 查看详情（prompt 全文 + 解析后的 JSONL 事件流） |
-| `G` | 重开那次会话接着聊（交互式 resume） |
+| `O` | 重开那次会话接着聊（等价于 `handoff open <run-id>`） |
 | `C` | 复制 session UUID 到剪贴板（macOS `pbcopy`） |
 
 自动刷新（2 秒间隔），详情视图打开时暂停刷新以免跳走。
+
+`TOKENS` 显示格式为 `input/output/cache_read`。如果 backend 的 JSONL 没有提供有效 token 数字，则显示 `-`；turn 数和 cost 会保存在 `runtime_info.usage`，TUI 底部状态栏会展示详情。
 
 | 标志 | 作用 |
 | --- | --- |
 | `--uuid` | 直接输出 UUID 列表（纯文本，非 TUI） |
 | `--cwd` | 列表模式显示完整 cwd 路径 |
+
+### open — 重开历史会话
+
+```bash
+handoff open [<run-id|seq>] [--pro] [--cwd <dir>] [--verbose]
+```
+
+省略参数时打开最近一次 run；传入 seq 或 run_id 时打开指定会话。`--verbose` 会在进入交互式 CLI 前打印完整启动命令。
 
 ### tail — 实时跟踪输出
 

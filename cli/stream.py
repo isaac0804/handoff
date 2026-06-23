@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import sys
 import json
+import os
 import subprocess
 import signal
 import datetime
 from .jsonl_parser import extract_result, format_event_for_stream, parse_jsonl_line
+from .runtime_info import merge_usage, scan_jsonl_usage, update_runtime_info, usage_from_json_line, usage_is_empty
 
 
 def _now_ts() -> str:
@@ -39,6 +41,7 @@ class ClaudeStreamParser:
         self.result_text = None
         self.result_is_error = False
         self.session_id = None
+        self.usage = {}
         self._last_ts = ""
         self._last_plan = ""
         self._pending = None  # (ts, plan_text)
@@ -47,6 +50,10 @@ class ClaudeStreamParser:
         out: list[tuple[str, str]] = []
         if not line.startswith("{"):
             return out
+
+        usage, _is_final = usage_from_json_line(line, "claude")
+        if usage:
+            self.usage = merge_usage(self.usage, usage)
 
         events = parse_jsonl_line(line, self._last_ts)
         for event in events:
@@ -105,6 +112,7 @@ class CodexStreamParser:
         self.result_text = None
         self.result_is_error = False
         self.session_id = None
+        self.usage = {}
         self._last_agent_message = None
 
     def feed(self, line: str) -> list[tuple[str, str]]:
@@ -145,6 +153,9 @@ class CodexStreamParser:
                     self._last_agent_message = text
                     out.append(("progress", f"{ts} {_first_line(text)}"))
         elif etype == "turn.completed":
+            usage, _is_final = usage_from_json_line(line, "codex")
+            if usage:
+                self.usage = merge_usage(self.usage, usage, accumulate_turn=True)
             if self._last_agent_message is not None:
                 self.result_text = self._last_agent_message
                 self.result_is_error = False
@@ -187,7 +198,19 @@ def execute_run(
     """
     _, out_path, result_path = task_paths_tuple
 
-    def update_status(status: str):
+    def current_status() -> str:
+        row = conn.execute("SELECT status FROM runs WHERE uuid = ?", (uid,)).fetchone()
+        return row["status"] if row else ""
+
+    def persist_runtime(*, clear_pid: bool = False):
+        usage = getattr(parser, "usage", {}) or {}
+        if usage_is_empty(usage):
+            usage = scan_jsonl_usage(jsonl_path, backend_type)
+        update_runtime_info(conn, uid, pid=0 if clear_pid else None, usage=usage)
+
+    def update_status(status: str, *, clear_pid: bool = False, persist_usage: bool = False):
+        if persist_usage or clear_pid:
+            persist_runtime(clear_pid=clear_pid)
         conn.execute("UPDATE runs SET status = ? WHERE uuid = ?", (status, uid))
         conn.commit()
 
@@ -198,7 +221,7 @@ def execute_run(
             of.write(disp + "\n")
 
     def finish_success(result_text: str):
-        update_status("success")
+        update_status("success", clear_pid=True, persist_usage=True)
         with open(result_path, "w", encoding="utf-8") as rf:
             rf.write(result_text)
         emit_result_marker()
@@ -208,6 +231,7 @@ def execute_run(
 
     parser = make_parser(backend_type)
 
+    preexec_fn = os.setsid if hasattr(os, "setsid") else None
     proc = subprocess.Popen(
         cmd,
         cwd=cwd,
@@ -215,7 +239,10 @@ def execute_run(
         # wrapper read our stdin (a non-tty stdin makes `script` flaky)
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        preexec_fn=preexec_fn,
     )
+    update_runtime_info(conn, uid, pid=proc.pid)
+    conn.commit()
 
     try:
         with open(jsonl_path, "w", encoding="utf-8") as jf, open(out_path, "w", encoding="utf-8") as of:
@@ -255,7 +282,7 @@ def execute_run(
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
-        update_status("interrupted")
+        update_status("interrupted", clear_pid=True, persist_usage=True)
         with open(result_path, "w", encoding="utf-8") as rf:
             rf.write("INTERRUPTED\n")
         emit_result_marker()
@@ -265,6 +292,14 @@ def execute_run(
 
     proc.wait()
 
+    if current_status() == "interrupted":
+        update_status("interrupted", clear_pid=True, persist_usage=True)
+        with open(result_path, "w", encoding="utf-8") as rf:
+            rf.write("INTERRUPTED\n")
+        emit_result_marker()
+        conn.close()
+        sys.exit(130)
+
     if parser.result_text is not None and not parser.result_is_error:
         finish_success(parser.result_text)
 
@@ -273,7 +308,7 @@ def execute_run(
         if result:
             finish_success(result)
 
-    update_status("error")
+    update_status("error", clear_pid=True, persist_usage=True)
     diag = f"handoff run: no successful result found; exit status {proc.returncode}\nJSONL={jsonl_path}\n"
     if parser.result_is_error and parser.result_text:
         diag = f"handoff run: backend reported an error: {parser.result_text}\n" + diag
