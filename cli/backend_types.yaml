@@ -93,6 +93,21 @@ types:
       - "{session_id}"
 
   # ── opencode type: `opencode run --format json` against local opencode login ──
+  #
+  # --agent handoff-safe: hardcoded, not a user-configurable placeholder.
+  # opencode runs here with --auto (all tool calls auto-approved, no human
+  # watching) — the same unattended shape as claude's
+  # --dangerously-skip-permissions and codex's --sandbox workspace-write.
+  # Unlike those two, opencode may carry its own MCP servers wired up for
+  # live infrastructure (Supabase, Firebase, ...) via the project's own
+  # opencode.json / the user's global opencode config — a background run
+  # has no business touching those unsupervised. `handoff-safe` is a global
+  # opencode agent (~/.config/opencode/agents/handoff-safe.md) that denies
+  # supabase_*/firebase_* tools while keeping everything else the default
+  # `build` agent has; interactive `opencode` use (TUI, or `opencode run`
+  # without --agent) is completely unaffected and keeps full MCP access.
+  # Requires that agent to exist — `handoff run --backend opencode` will
+  # error out with "unknown agent" if it doesn't; create it once per machine.
   opencode:
     command: "opencode"
     pty: []
@@ -101,6 +116,8 @@ types:
       - "run"
       - "--model"
       - "{model}"
+      - "--agent"
+      - "handoff-safe"
       - "--format"
       - "json"
       - "--auto"
@@ -115,6 +132,8 @@ types:
       - "run"
       - "--model"
       - "{model}"
+      - "--agent"
+      - "handoff-safe"
       - "--format"
       - "json"
       - "--auto"
