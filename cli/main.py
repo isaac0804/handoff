@@ -39,7 +39,31 @@ Run ids: <mmdd>-<backend2>-<SEQ_CODE>-<slug>  (e.g. 0611-ds-03-fix-auth)
     )
 
 
+def _force_utf8_io():
+    """Reconfigure std streams to UTF-8, regardless of the OS console codepage.
+
+    On Windows, Python's stdio defaults to the console's ANSI codepage (e.g.
+    GBK on Chinese Windows) unless explicitly told otherwise. A heredoc/pipe
+    carrying real UTF-8 (any non-ASCII character — em dash, curly quote, CJK
+    text) then gets corrupted into unpaired surrogates on stdin.read(),
+    which later blows up with UnicodeEncodeError wherever that string is
+    written out (e.g. the SQLite insert in core.create_run). stdout/stderr
+    get errors="replace" as a safety net so an unexpected glyph degrades to
+    "?" instead of crashing a background run outright.
+    """
+    for stream, errors in ((sys.stdin, "strict"), (sys.stdout, "replace"), (sys.stderr, "replace")):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors=errors)
+        except (ValueError, OSError):
+            pass
+
+
 def main():
+    _force_utf8_io()
+
     # Run legacy migration early — before any config check — so that an
     # existing legacy dir is renamed to ~/.handoff before we look for config.
     from .core import _migrate_legacy_state
