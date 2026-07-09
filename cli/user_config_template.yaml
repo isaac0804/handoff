@@ -15,23 +15,26 @@ backends:
     pro_model: "deepseek-v4-pro[1m]"
     env:
       ANTHROPIC_MODEL: "{model}"
-
-      ## you can also use opencode:
-      ## @see  https://github.com/iTzFaisal/oc-cc-proxy.git
-      # ANTHROPIC_BASE_URL: http://127.0.0.1:4000 
-      # ANTHROPIC_AUTH_TOKEN: unused      
-
       ANTHROPIC_BASE_URL: https://api.deepseek.com/anthropic
       ANTHROPIC_AUTH_TOKEN: "${DEEPSEEK_API_KEY}"   # 或直接写 sk-...
 
-  opus:            
+  # opencode type: no proxy, no API key — shells out to the local `opencode`
+  # CLI directly and rides your existing `opencode auth login` session,
+  # including free Zen models (e.g. deepseek-v4-flash-free, $0/token).
+  # Model names use opencode's own `provider/model` catalog (`opencode models`).
+  opencode:
+    type: opencode
+    model: "opencode/deepseek-v4-flash-free"
+    pro_model: "opencode/deepseek-v4-flash-free"  # swap for a stronger opencode/ or paid provider/ model when you have one
+
+  opus:
     type: claude
     model: sonnet
     pro_model: opus #you can change to Fable 5
     env:
       ANTHROPIC_MODEL: "{model}"
 
-  codex:            
+  codex:
     type: codex
     model: gpt-5.5 # you can change to gpt-5.4
     pro_model: gpt-5.5

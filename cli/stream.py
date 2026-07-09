@@ -4,9 +4,10 @@
 (JSONL capture, status transitions, RESULT= protocol). What varies per backend
 type is how its output stream is interpreted; that lives in the parsers:
 
-  ClaudeStreamParser — claude `--output-format stream-json` JSONL
-  CodexStreamParser  — `codex exec --json` experimental event JSONL
-                       (schema notes: docs/design-notes-codex.md)
+  ClaudeStreamParser   — claude `--output-format stream-json` JSONL
+  CodexStreamParser    — `codex exec --json` experimental event JSONL
+                         (schema notes: docs/design-notes-codex.md)
+  OpencodeStreamParser — `opencode run --format json` event JSONL
 
 Parser contract:
   feed(line) / finish() return display events:
@@ -175,8 +176,83 @@ class CodexStreamParser:
         return []
 
 
+class OpencodeStreamParser:
+    """Parses `opencode run --format json` events.
+
+    Every event carries a top-level sessionID (captured once, like codex's
+    thread.started). Progress comes from tool_use and text parts; opencode has
+    no explicit "turn completed" event, so the result is simply the last text
+    part seen — execute_run treats process exit + a non-None result_text as
+    success. step_finish carries per-step token/cost usage, accumulated across
+    the run the same way codex accumulates per turn.
+    """
+
+    def __init__(self):
+        self.result_text = None
+        self.result_is_error = False
+        self.session_id = None
+        self.usage = {}
+
+    def feed(self, line: str) -> list[tuple[str, str]]:
+        out: list[tuple[str, str]] = []
+        line = line.strip()
+        if not line.startswith("{"):
+            return out
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            return out
+        if not isinstance(obj, dict):
+            return out
+
+        ts = _now_ts()
+
+        sid = obj.get("sessionID")
+        if sid and self.session_id is None:
+            self.session_id = sid
+            out.append(("session", sid))
+            out.append(("progress", f"{ts} session {sid}"))
+
+        etype = obj.get("type")
+        part = obj.get("part") or {}
+        if not isinstance(part, dict):
+            part = {}
+
+        if etype == "tool_use":
+            tool = part.get("tool", "?")
+            status = (part.get("state") or {}).get("status", "")
+            out.append(("progress", f"{ts} $ {tool} {status}".rstrip()))
+        elif etype == "text":
+            text = part.get("text", "")
+            if text:
+                self.result_text = text
+                self.result_is_error = False
+                out.append(("progress", f"{ts} {_first_line(text)}"))
+        elif etype == "step_finish":
+            usage, _is_final = usage_from_json_line(line, "opencode")
+            if usage:
+                self.usage = merge_usage(self.usage, usage, accumulate_turn=True)
+            reason = part.get("reason", "")
+            if reason not in ("stop", "tool-calls", ""):
+                self.result_is_error = True
+                out.append(("progress", f"{ts} error: {_first_line(reason)}"))
+        elif etype == "error":
+            message = obj.get("message") or part.get("message") or "opencode error"
+            self.result_text = str(message)
+            self.result_is_error = True
+            out.append(("progress", f"{ts} error: {_first_line(str(message))}"))
+        return out
+
+    def finish(self) -> list[tuple[str, str]]:
+        return []
+
+
 def make_parser(backend_type: str):
-    return CodexStreamParser() if backend_type == "codex" else ClaudeStreamParser()
+    if backend_type == "codex":
+        return CodexStreamParser()
+    if backend_type == "opencode":
+        return OpencodeStreamParser()
+    return ClaudeStreamParser()
 
 
 def execute_run(

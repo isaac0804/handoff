@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 
 
@@ -41,6 +42,8 @@ def _planned_links():
          _home_path(".claude", "skills", "handoff-codex", "SKILL.md")),
         ("soft link", os.path.join(skills_dir, "handoff-opus", "SKILL.md"),
          _home_path(".claude", "skills", "handoff-opus", "SKILL.md")),
+        ("soft link", os.path.join(skills_dir, "handoff-oc", "SKILL.md"),
+         _home_path(".claude", "skills", "handoff-oc", "SKILL.md")),
     ]
 
 
@@ -73,32 +76,53 @@ def _confirm() -> bool:
     return answer.lower() == "y"
 
 
+def _link_or_copy(link_fn, src: str, dest: str) -> str:
+    """Try link_fn(src, dest); fall back to a plain copy if the platform refuses.
+
+    Windows needs admin rights or Developer Mode for os.symlink, and os.link
+    can fail across filesystem boundaries (e.g. the uv tool install dir vs.
+    %USERPROFILE%) with WinError 17/1314. A copy loses "stays in sync with
+    the installed package" but is the only option that always works; re-run
+    `handoff init` after an upgrade to refresh copies.
+
+    Returns "hard link" / "soft link" / "copy" for the caller to report.
+    """
+    try:
+        link_fn(src, dest)
+        return "hard link" if link_fn is os.link else "soft link"
+    except OSError:
+        shutil.copyfile(src, dest)
+        return "copy"
+
+
 def _create_links():
-    """Create hard/soft links for agent and skill files from cli/skills/."""
+    """Create hard/soft links (or, on platforms that refuse those, plain copies)
+    for agent and skill files from cli/skills/."""
     skills_dir = os.path.join(_pkg_root(), "skills")
     created = 0
+    kinds_used = set()
 
-    # Hard link for Codex agent
+    # Codex agent (hard link preferred)
     src_agent = os.path.join(skills_dir, "handoff-ds.toml")
     dest_agent = _home_path(".codex", "agents", "handoff-ds.toml")
     os.makedirs(os.path.dirname(dest_agent), exist_ok=True)
     if os.path.exists(dest_agent):
         os.remove(dest_agent)
-    os.link(src_agent, dest_agent)
+    kinds_used.add(_link_or_copy(os.link, src_agent, dest_agent))
     created += 1
 
-    # Soft links for Claude Code skills (3 backends)
-    for skill_name in ("handoff-ds", "handoff-codex", "handoff-opus"):
+    # Claude Code skills (4 backends; soft link preferred)
+    for skill_name in ("handoff-ds", "handoff-codex", "handoff-opus", "handoff-oc"):
         src_skill = os.path.join(skills_dir, skill_name, "SKILL.md")
         dest_skill_dir = _home_path(".claude", "skills", skill_name)
         dest_skill = os.path.join(dest_skill_dir, "SKILL.md")
         os.makedirs(dest_skill_dir, exist_ok=True)
         if os.path.lexists(dest_skill):
             os.remove(dest_skill)
-        os.symlink(src_skill, dest_skill)
+        kinds_used.add(_link_or_copy(os.symlink, src_skill, dest_skill))
         created += 1
 
-    print(f"✓ Created {created} links (1 hard + 3 soft)")
+    print(f"+ Created {created} links/copies ({', '.join(sorted(kinds_used))})")
 
 
 def run_init(assume_yes: bool = False):
@@ -111,7 +135,7 @@ def run_init(assume_yes: bool = False):
 
     wrote_config = write_default_user_config()
     if wrote_config:
-        print(f"✓ Wrote {_short(user_config_path())}")
+        print(f"+ Wrote {_short(user_config_path())}")
     else:
         print(f"  Config {_short(user_config_path())} already exists (skipped)")
 

@@ -3,9 +3,11 @@
 # To understand the complete configuration model, start here.
 #
 # Types:
-#   claude — PTY-wrapped `claude -p --output-format stream-json` against any
-#            Anthropic-compatible endpoint.
-#   codex  — `codex exec --json` against the local codex login state.
+#   claude   — PTY-wrapped `claude -p --output-format stream-json` against any
+#              Anthropic-compatible endpoint.
+#   codex    — `codex exec --json` against the local codex login state.
+#   opencode — `opencode run --format json` against the local opencode login
+#              state (free Zen models included — no API key needed).
 #
 # Each type defines the CLI command, PTY wrapper, and flag templates.
 # Placeholders ({model}, {prompt}, {session_id}, {system_prompt}, {cwd}, {home})
@@ -89,3 +91,40 @@ types:
     resume_flags:
       - "resume"
       - "{session_id}"
+
+  # ── opencode type: `opencode run --format json` against local opencode login ──
+  opencode:
+    command: "opencode"
+    pty: []
+    # Fresh run: opencode run --model <model> --format json --auto --dir <cwd> <prompt>
+    session_flags:
+      - "run"
+      - "--model"
+      - "{model}"
+      - "--format"
+      - "json"
+      - "--auto"
+      - "--dir"
+      - "{cwd}"
+      - "{prompt}"
+    # opencode has no separate "set session id" mode for a fresh run; the id is
+    # self-assigned and reported on every streamed event's sessionID field.
+    session_id_flags: []
+    # Non-interactive continuation: opencode run --session <id> ... <prompt>.
+    continue_id_flags:
+      - "run"
+      - "--model"
+      - "{model}"
+      - "--format"
+      - "json"
+      - "--auto"
+      - "--session"
+      - "{session_id}"
+      - "--dir"
+      - "{cwd}"
+      - "{prompt}"
+    # Interactive reopen: `opencode run --session <id> --continue` (drops into TUI).
+    resume_flags:
+      - "--session"
+      - "{session_id}"
+      - "--continue"

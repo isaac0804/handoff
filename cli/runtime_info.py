@@ -212,6 +212,25 @@ def usage_from_json_line(line: str, backend_type: str = "") -> tuple[dict[str, A
         normalized["cost_usd"] = _safe_float(usage.get("total_cost_usd", usage.get("cost_usd", 0.0)))
         return normalized, True
 
+    if etype == "step_finish":
+        part = obj.get("part") or {}
+        tokens = part.get("tokens") if isinstance(part, dict) else None
+        if not isinstance(tokens, dict):
+            return None, False
+        cache = tokens.get("cache") or {}
+        if not isinstance(cache, dict):
+            cache = {}
+        normalized = normalize_usage({
+            "input_tokens": tokens.get("input", 0),
+            "output_tokens": tokens.get("output", 0),
+            "reasoning_output_tokens": tokens.get("reasoning", 0),
+            "cache_read_input_tokens": cache.get("read", 0),
+            "cache_creation_input_tokens": cache.get("write", 0),
+        })
+        normalized["turns"] = 1
+        normalized["cost_usd"] = _safe_float(part.get("cost", 0.0))
+        return normalized, True
+
     if backend_type == "claude" or not backend_type:
         if etype == "stream_event":
             event = obj.get("event") or {}
@@ -237,7 +256,7 @@ def scan_jsonl_usage(jsonl_path: str, backend_type: str = "") -> dict[str, Any]:
                 parsed, is_final = usage_from_json_line(line, backend_type)
                 if not parsed:
                     continue
-                if backend_type == "codex" and is_final:
+                if backend_type in ("codex", "opencode") and is_final:
                     usage = merge_usage(usage, parsed, accumulate_turn=True)
                 else:
                     usage = merge_usage(usage, parsed)

@@ -7,13 +7,16 @@ backend's own fields in YAML), this module provides:
   - build_args(backend, ...): Build the CLI argument list (claude or codex)
 
 Backend types:
-  claude — `claude -p ... --output-format stream-json` against any
-           anthropic-compatible endpoint; identity flags combine with
-           session_flags (`--session-id` fresh / `--resume` continuation).
-  codex  — `codex exec --json ...`; a fresh run takes session_flags alone
-           (codex assigns the thread id itself), a continuation uses
-           continue_id_flags *instead of* session_flags because
-           `codex exec resume` accepts a different flag set.
+  claude   — `claude -p ... --output-format stream-json` against any
+             anthropic-compatible endpoint; identity flags combine with
+             session_flags (`--session-id` fresh / `--resume` continuation).
+  codex    — `codex exec --json ...`; a fresh run takes session_flags alone
+             (codex assigns the thread id itself), a continuation uses
+             continue_id_flags *instead of* session_flags because
+             `codex exec resume` accepts a different flag set.
+  opencode — `opencode run --format json ...`; same self-assigned-id shape
+             as codex (fresh = session_flags alone, continuation =
+             continue_id_flags alone with `--session <id>`).
 
 Placeholder substitution:
   {prompt}         — the prompt text
@@ -29,6 +32,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import shutil
 import sys
 from typing import Optional
 
@@ -36,6 +40,21 @@ from typing import Optional
 def _substitute(text: str, ctx: dict) -> str:
     """Replace {placeholders} in a string using ctx dict."""
     return text.format(**ctx)
+
+
+def _resolve_command(raw: str) -> str:
+    """Resolve a bare command name to an absolute path via PATH/PATHEXT.
+
+    subprocess.Popen(shell=False) on Windows does not apply PATHEXT the way a
+    shell does, so a bare "codex"/"opencode" (installed as codex.CMD /
+    opencode.CMD via npm) raises FileNotFoundError even though the shim is on
+    PATH — claude.EXE happens to dodge this because it's a real .exe. Resolve
+    through shutil.which first; fall back to the raw string (e.g. already an
+    absolute path, or on POSIX where this was never an issue) if it can't be
+    found so behaviour elsewhere is unchanged.
+    """
+    resolved = shutil.which(raw)
+    return resolved or raw
 
 
 def _resolve_env_val(val, ctx: dict):
@@ -142,19 +161,20 @@ def build_args(
     session_id is present, `continue_id_flags` (--resume, continuation) or
     `session_id_flags` (--session-id, fresh) are appended on top.
 
-    codex type: a fresh run is session_flags alone (`codex exec --json ...`;
-    codex assigns the thread id itself, reported via the thread.started event).
-    A continuation is continue_id_flags alone (`codex exec resume --json <id>
-    <prompt>`) because `codex exec resume` rejects --sandbox/-C.
+    codex/opencode types: a fresh run is session_flags alone (the backend
+    assigns its own session/thread id, reported via a stream event). A
+    continuation is continue_id_flags alone (`codex exec resume --json <id>
+    <prompt>` / `opencode run --session <id> ... <prompt>`) because both
+    CLIs reject their fresh-run flags (--sandbox/-C, --auto/--dir) on resume.
     """
     ctx = _base_ctx(backend, model=model or "", pro_model=pro_model or "", cwd=cwd)
     ctx["prompt"] = prompt
     ctx["session_id"] = session_id or ""
 
-    command = _resolve_env_val(backend.get("command") or backend.get("claude_command", "claude"), ctx)
+    command = _resolve_command(_resolve_env_val(backend.get("command") or backend.get("claude_command", "claude"), ctx))
     args = [command]
 
-    if backend_type(backend) == "codex" and resume and session_id:
+    if backend_type(backend) in ("codex", "opencode") and resume and session_id:
         for flag in backend.get("continue_id_flags", []):
             resolved = _resolve_env_val(flag, ctx)
             if resolved:
@@ -194,7 +214,7 @@ def build_resume_args(
     ctx = _base_ctx(backend, pro_model=pro_model or "")
     ctx["session_id"] = session_id or ""
 
-    command = _resolve_env_val(backend.get("command") or backend.get("claude_command", "claude"), ctx)
+    command = _resolve_command(_resolve_env_val(backend.get("command") or backend.get("claude_command", "claude"), ctx))
     args = [command]
 
     for flag in backend.get("resume_flags", []):
