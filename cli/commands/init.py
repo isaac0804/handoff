@@ -125,6 +125,66 @@ def _create_links():
     print(f"+ Created {created} links/copies ({', '.join(sorted(kinds_used))})")
 
 
+_OPENCODE_SAFE_AGENT = "handoff-safe"
+
+
+def _opencode_agent_path() -> str:
+    """Where the handoff-safe opencode agent must live for --agent to resolve.
+
+    Matches opencode's own global-agent convention (XDG_CONFIG_HOME, which
+    opencode applies even on Windows) — not part of this repo, so `handoff
+    init` can only check for it, not create it.
+    """
+    config_home = os.environ.get("XDG_CONFIG_HOME") or _home_path(".config")
+    return os.path.join(config_home, "opencode", "agents", f"{_OPENCODE_SAFE_AGENT}.md")
+
+
+def _check_opencode_agent():
+    """Warn (never fail) if an opencode-type backend is configured but the
+    handoff-safe agent it hardcodes via --agent isn't set up on this machine.
+
+    Without it, `handoff run --backend <opencode-type-backend>` fails at
+    launch with opencode's own "unknown agent" error — this just gives a
+    clearer signal at init time instead of a confusing failure on first use.
+    """
+    from ..config import Config
+
+    try:
+        config = Config()
+        uses_opencode = any(
+            b.get("type") == "opencode" for b in config.backends.values()
+        )
+    except SystemExit:
+        return  # config not fully set up yet — nothing to check
+    if not uses_opencode:
+        return
+
+    agent_path = _opencode_agent_path()
+    if os.path.isfile(agent_path):
+        return
+
+    print("")
+    print(f"! opencode backend configured, but the '{_OPENCODE_SAFE_AGENT}' agent")
+    print(f"  it requires (--agent {_OPENCODE_SAFE_AGENT}) was not found at:")
+    print(f"    {_short(agent_path)}")
+    print(
+        "  Without it, `handoff run --backend <opencode backend>` will fail "
+        "with opencode's"
+    )
+    print(
+        "  own \"unknown agent\" error. This agent keeps unattended background "
+        "dispatch from"
+    )
+    print(
+        "  touching infra MCP servers (Supabase, Firebase, ...) even if a "
+        "project's opencode"
+    )
+    print(
+        "  config wires them up — create it once per machine before using "
+        "this backend."
+    )
+
+
 def run_init(assume_yes: bool = False):
     if not assume_yes and not _confirm():
         print("handoff: initialization cancelled")
@@ -140,6 +200,7 @@ def run_init(assume_yes: bool = False):
         print(f"  Config {_short(user_config_path())} already exists (skipped)")
 
     _create_links()
+    _check_opencode_agent()
 
     readme_url = "https://github.com/dazuiba/handoff#configuration"
 
