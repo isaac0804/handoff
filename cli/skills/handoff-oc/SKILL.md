@@ -25,6 +25,7 @@ __HF_EOF__
 - 回显任何 home 下的任务路径时，缩写成 `~/.handoff/...`，不要暴露 `/Users/<name>/...`。
 - opencode 使用本机已登录的 opencode 账号（免费 Zen 额度），不消耗 DeepSeek/Anthropic 付费 API — 无需额外配置 token。
 - opencode 以 `--auto`（自动批准所有工具调用）方式在后台无人值守运行，等同 handoff-ds 用 `--dangerously-skip-permissions`、handoff-codex 用 `--sandbox workspace-write` — 派发的任务应限定在可信目录内，不要用于用户明确要求人工审核每一步的场景。
+- 固定用 `--agent handoff-safe`（写死在 backend_types.yaml，非用户可配置）：屏蔽完整 Supabase/Firebase MCP（`supabase_*`、`firebase_*` 全拒绝），保留只读 Supabase 连接（`supabase-ro_*`，仅当项目自己的 `opencode.json` 定义了它）用于查数据/读取分析，但 `supabase-ro_apply_migration`/`create_branch`/`delete_branch`/`deploy_edge_function`/`merge_branch`/`rebase_branch`/`reset_branch` 依旧拒绝——`read_only=true` 只保证 Postgres 角色只读，管不到这些管理面 API。派发"读数据库找失败模式"这类调查任务是安全的；派发任何涉及 schema/migration/基础设施变更的任务，模型会自己停下报告而不是找变通方法。
 
 启动后从 **stdout/stderr** 捕获 `RUN_ID=<id>`（如 `RUN_ID=0709-op-03-fix-auth`）；这就是本次任务的 run_id。记住它，用户要求"继续上次/接着再做 X"时靠它 `resume`。
 
